@@ -1,4 +1,4 @@
-# Conta Clara
+# Nexus Finance
 
 Aplicação web de controle financeiro pessoal, feita com React, TypeScript e Vite. Os dados são guardados no armazenamento local do navegador em que a aplicação é usada.
 
@@ -15,9 +15,9 @@ O Node.js e as dependências deste projeto já estão instalados nesta pasta.
 
 - Cadastro de lançamentos por PIX, débito, crédito à vista e crédito parcelado.
 - Parcelas distribuídas nos meses seguintes, com arredondamento em centavos.
-- Cartões configuráveis com dia de fechamento e vencimento. Compras feitas no dia do fechamento ou depois entram no ciclo seguinte.
+- Cartões configuráveis com dia de fechamento e vencimento. O sistema prevê o mês de vencimento da fatura; compras no fechamento ou depois vão para o próximo ciclo.
 - Categorias, visão mensal, busca, filtros, resumo por categoria e exportação CSV.
-- Participantes para dividir despesas e receitas, com atribuições por lançamento ou parcela e resumo local de valores a receber.
+- Participantes para dividir despesas, com atribuição por lançamento ou parcela e resumo local de valores a receber.
 - Dados locais no navegador; não há conta ou servidor.
 
 ## Hospedar no GitHub Pages
