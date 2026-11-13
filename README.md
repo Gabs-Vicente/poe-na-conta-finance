@@ -1,36 +1,48 @@
-# Nexus Finance
+# Põe na Conta
 
-Aplicação web de controle financeiro pessoal, feita com React, TypeScript e Vite. Os dados são guardados no armazenamento local do navegador em que a aplicação é usada.
+Notas internas para desenvolver e manter este projeto pessoal. Este README descreve a implementação atual; não é uma apresentação do produto nem um guia para distribuição a usuários.
 
-## Executar no computador
+## Escopo atual
 
-1. Abra esta pasta no VS Code.
-2. Abra o terminal integrado (`Terminal` → `Novo Terminal`).
-3. Execute `npm run dev`.
-4. Abra o endereço local mostrado no terminal (normalmente `http://localhost:5173`).
+Aplicação de finanças pessoais feita para uso local no navegador. Não há autenticação, API, banco de dados ou sincronização. Cada navegador mantém seus próprios dados; publicar o frontend no GitHub Pages não compartilha nem transfere esses dados entre computadores.
 
-O Node.js e as dependências deste projeto já estão instalados nesta pasta.
+Em uma instalação sem dados salvos, a aplicação inicializa com registros fictícios de demonstração definidos em `src/finance.ts`. Considere isso ao validar uma instalação ou preparar uma cópia para uso próprio.
 
-## Recursos
+## Ambiente de desenvolvimento
 
-- Modelos de despesas recorrentes mensais com revisão por mês; cada cobrança só entra nos lançamentos depois de confirmada, e pode ser pulada ou pausada.
-- Tema escuro alternável, com preferência guardada neste navegador.
+Requer Node.js 22 (como no workflow de publicação) e npm.
 
-- Cadastro de lançamentos por PIX, débito, crédito à vista e crédito parcelado.
-- Parcelas distribuídas nos meses seguintes, com arredondamento em centavos.
-- Cartões configuráveis com dia de fechamento e vencimento. O sistema prevê o mês de vencimento da fatura; compras no fechamento ou depois vão para o próximo ciclo.
-- Categorias, visão mensal, busca, filtros, resumo por categoria e exportação CSV.
-- Participantes para dividir despesas, com atribuição por lançamento ou parcela e resumo local de valores a receber.
-- Backup completo em JSON para exportar e restaurar categorias, cartões, participantes e lançamentos. A importação substitui os dados atuais após confirmação.
-- Dados locais no navegador; não há conta ou servidor. A validação dos dados salvos e dos backups evita carregar registros com estrutura inválida.
-- Exportação CSV com proteção contra fórmulas em campos preenchidos pelo usuário.
+```sh
+npm ci
+npm run dev
+```
 
-## Testes
+O Vite informa o endereço local no terminal. Os demais comandos disponíveis são:
 
-Execute `npm test` com Node.js 22.6 ou mais recente para verificar o cálculo de faturas e parcelas, validação/restauração de backups e proteção do CSV.
+```sh
+npm test       # testes das regras financeiras e de importação/exportação
+npm run lint   # análise estática
+npm run build  # verificação TypeScript e build de produção em dist/
+npm run preview # servir localmente o build de dist/
+```
 
-## Hospedar no GitHub Pages
+## Dados e backup
 
-O arquivo `.github/workflows/deploy.yml` publica automaticamente a aplicação no GitHub Pages a cada envio para a branch `main`. Crie um repositório GitHub para o projeto, envie os arquivos e, em `Settings` → `Pages`, selecione `GitHub Actions` como origem de publicação. Os dados ficam no navegador de cada pessoa e não são sincronizados entre dispositivos.
+Os lançamentos e cadastros são persistidos no `localStorage` do navegador. Preferências e perfil também são locais. Não existe conta para recuperação de dados: para transportar as informações entre navegadores, use a exportação e importação do backup JSON disponível na aplicação. A importação substitui os dados locais atuais após confirmação. CSV é uma exportação para consulta, não um formato de restauração.
 
-Para usar em produção com mais de um dispositivo ou usuário, será necessário adicionar uma API e um banco de dados.
+O armazenamento local é validado ao carregar e os backups são validados antes da restauração. O backup JSON inclui os dados financeiros e configurações de perfil suportadas pelo formato atual.
+
+## Organização do código
+
+- `src/App.tsx`: composição da interface, navegação e interações.
+- `src/App.css`: estilos, temas e comportamento responsivo.
+- `src/finance.ts`: tipos, dados iniciais e regras/cálculos financeiros.
+- `tests/finance.test.mjs`: testes das regras financeiras, backups e exportação CSV.
+- `vite.config.ts`: configuração do Vite; o servidor local usa a porta 5173.
+- `.github/workflows/deploy.yml`: build e publicação no GitHub Pages.
+
+## Publicação configurada
+
+O workflow publica o conteúdo de `dist/` no GitHub Pages quando há push para `main` ou execução manual do workflow. O repositório precisa estar configurado para usar GitHub Actions como origem do Pages. A publicação serve somente o frontend estático; não cria backend, autenticação nem sincronização.
+
+Antes de alterar o fluxo de publicação, confira o workflow e as configurações de Pages do repositório. Os dados de cada navegador não fazem parte do artefato publicado.
