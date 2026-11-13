@@ -454,3 +454,68 @@ footer{color:#89877f}
 .reset-backup-shortcut{width:100%;margin-bottom:16px;text-align:center}
 .reset-confirm-error{display:block;margin-top:6px;font-size:9px;font-weight:500;color:#c93b32}
 .app-shell[data-theme="dark"] .reset-confirm-error{color:#f28b82}
+.backup-toast{top:auto;bottom:24px;right:24px;z-index:25;justify-content:space-between;animation:nexus-toast-in .22s cubic-bezier(.2,.75,.25,1) both}
+.backup-toast.is-closing{pointer-events:none;animation:nexus-toast-out .22s cubic-bezier(.32,0,.2,1) forwards}
+@keyframes nexus-toast-in{from{opacity:0;transform:translateY(10px) scale(.98)}to{opacity:1;transform:translateY(0) scale(1)}}
+@keyframes nexus-toast-out{from{opacity:1;transform:translateY(0) scale(1)}to{opacity:0;transform:translateY(10px) scale(.98)}}
+.confirm-dialog-modal{width:min(100%,420px)}
+.confirm-dialog-description{margin:0 0 6px;font-size:11px;line-height:1.55;color:#66685f}
+.app-shell[data-theme="dark"] .confirm-dialog-description{color:#b8b7ad}
+.money-input-wrap{position:relative;display:flex;align-items:center;width:100%;margin-top:6px}
+.money-input-wrap input{margin-top:0;padding-left:32px}
+.money-input-wrap input:has(+.money-suffix){padding-left:10px;padding-right:28px}
+.budget-preference-fields .money-input-wrap{margin-top:0}
+.budget-preference-fields .money-prefix+input{padding-left:32px}
+.money-prefix{position:absolute;left:11px;pointer-events:none;user-select:none;font-size:11px;font-weight:700;color:#77766f;line-height:1}
+.money-suffix{position:absolute;right:11px;pointer-events:none;user-select:none;font-size:11px;font-weight:700;color:#77766f;line-height:1}
+.app-shell[data-theme="dark"] .money-prefix,.app-shell[data-theme="dark"] .money-suffix{color:#a8a79d}
+.money-input-wrap.compact{margin-top:0;width:auto}
+.modal label.participant-amount .money-input-wrap.compact input{width:112px;margin-top:0;padding-left:28px}
+.money-input-wrap.compact .money-prefix{left:9px;font-size:10px}
+.modal.is-shaking{animation:nexus-modal-shake .42s cubic-bezier(.36,.07,.19,.97) both}
+.modal label{transition:color .18s ease}
+.modal label input,.modal label select{transition:border-color .18s ease,background-color .18s ease,box-shadow .18s ease,color .18s ease}
+.modal label.is-invalid,.category-color-field.is-invalid .category-color-label{color:#c93b32}
+.modal label.is-invalid input,.modal label.is-invalid select{border-color:#d9433a;background:#fdf2f1;color:#982821;box-shadow:0 0 0 3px #d9433a20}
+.modal label.is-invalid input::placeholder{color:#c7736d}
+.modal label.is-invalid input:focus-visible,.modal label.is-invalid select:focus-visible{outline-color:#d9433a}
+.modal label.is-invalid .money-prefix,.modal label.is-invalid .money-suffix{color:#c93b32}
+.app-shell[data-theme="dark"] .modal label.is-invalid,.app-shell[data-theme="dark"] .category-color-field.is-invalid .category-color-label{color:#f28b82}
+.app-shell[data-theme="dark"] .modal label.is-invalid input,.app-shell[data-theme="dark"] .modal label.is-invalid select{border-color:#e05d53;background:#36201f;color:#f9d2ce;box-shadow:0 0 0 3px #e05d5333}
+.app-shell[data-theme="dark"] .modal label.is-invalid input::placeholder{color:#cf8c86}
+.app-shell[data-theme="dark"] .modal label.is-invalid input:focus-visible,.app-shell[data-theme="dark"] .modal label.is-invalid select:focus-visible{outline-color:#f28b82}
+.app-shell[data-theme="dark"] .modal label.is-invalid .money-prefix,.app-shell[data-theme="dark"] .modal label.is-invalid .money-suffix{color:#f28b82}
+.field-error-msg{display:block;margin-top:5px;font-size:9px;font-weight:600;line-height:1.35;color:#c93b32}
+.app-shell[data-theme="dark"] .field-error-msg{color:#f28b82}
+.modal label.participant-amount{flex-wrap:wrap;justify-content:flex-end}
+.modal label.participant-amount .field-error-msg{flex-basis:100%;margin-top:4px;text-align:right}
+.share-error{padding:9px 11px;border:1px solid #ebc2bd;border-radius:9px;background:#fdf2f1;color:#b4322a;font-size:10px;font-weight:600;margin:8px 0 4px}
+.app-shell[data-theme="dark"] .share-error{border-color:#6b3834;background:#341f1e;color:#f59e96}
+.category-color-field{margin-bottom:13px}
+.category-color-label{display:block;color:#526057;font-size:10px;font-weight:600;margin-bottom:8px;transition:color .18s ease}
+.app-shell[data-theme="dark"] .category-color-label{color:#eceae0}
+.color-swatch-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;margin-bottom:10px}
+.color-swatch{height:34px;border:2px solid transparent;border-radius:10px;display:grid;place-items:center;color:#fff;font-size:13px;font-weight:800;cursor:pointer;box-shadow:inset 0 0 0 1px rgba(0,0,0,.12);transition:transform .15s ease,box-shadow .15s ease,border-color .15s ease}
+.color-swatch:hover{transform:translateY(-1px)}
+.color-swatch.is-selected{border-color:#171816;box-shadow:0 0 0 2px #fff,0 0 0 4px #171816;transform:scale(1.03)}
+.app-shell[data-theme="dark"] .color-swatch.is-selected{border-color:#f0eee5;box-shadow:0 0 0 2px #20211d,0 0 0 4px #f0eee5}
+.modal label.custom-hex-row{display:flex;align-items:center;gap:9px;margin:0;padding:6px 10px;border:1px solid #e7e5df;border-radius:10px;background:#faf9f6}
+.app-shell[data-theme="dark"] .modal label.custom-hex-row{border-color:#41423a;background:#292a24}
+.custom-hex-preview{width:22px;height:22px;flex:0 0 22px;border-radius:7px;box-shadow:inset 0 0 0 1px rgba(0,0,0,.16)}
+.custom-hex-caption{font-size:10px;font-weight:600;color:#6c6d65;margin-right:auto}
+.app-shell[data-theme="dark"] .custom-hex-caption{color:#b9b8ae}
+.modal label.custom-hex-row input{width:96px;height:30px;margin:0;padding:0 8px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11px;font-weight:700;text-align:center;letter-spacing:.5px}
+@media(max-width:760px){
+  .backup-toast{bottom:calc(74px + env(safe-area-inset-bottom));right:16px;max-width:min(380px,calc(100vw - 32px))}
+  .money-prefix{left:12px;font-size:13px}
+  .money-suffix{right:12px;font-size:13px}
+  .money-input-wrap input,.budget-preference-fields .money-prefix+input{padding-left:38px}
+  .money-input-wrap input:has(+.money-suffix){padding-left:12px;padding-right:32px}
+  .money-input-wrap.compact .money-prefix{left:10px;font-size:12px}
+  .modal label.participant-amount .money-input-wrap.compact input{width:124px;padding-left:34px}
+  .color-swatch{height:38px}
+  .modal label.custom-hex-row input{width:110px;height:36px;font-size:13px}
+}
+@media(max-width:520px){
+  .confirm-dialog-modal{width:100%;max-width:100%}
+}

@@ -1,21 +1,39 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
-import { buildOccurrences as calculateOccurrences, cardDueMonth as calculateCardDueMonth, createBackup, csvCell, dateKey, isDate, monthKey, normalizeDateInput, parseBackupFile, parseMoneyInput, readStoredData, seed, shiftMonth as shiftMonthKey, type BackupPayload, type Card, type Category, type Data, type Expense, type Method, type Participant, type Recurrence } from './finance'
+import { buildOccurrences as calculateOccurrences, cardDueMonth as calculateCardDueMonth, createBackup, csvCell, dateKey, formatMoneyInput, isDate, monthKey, normalizeDateInput, parseBackupFile, parseMoneyInput, readStoredData, seed, shiftMonth as shiftMonthKey, type BackupPayload, type Card, type Category, type Data, type Expense, type Method, type Participant, type Recurrence } from './finance'
 
 type ExpenseForm = { description: string; amount: string; date: string; category: string; method: Method; cardId: string; installments: string; shares: { participantId: string; amount: string; installment: string }[] }
 type SettingEditor = { kind: 'category' | 'card' | 'participant'; id?: string; name: string; color: string; closingDay: string; dueDay: string }
 type RecurrenceEditor = { id?: string; description: string; amount: string; category: string; method: Method; cardId: string; day: string }
 type MainView = 'Visão geral' | 'Lançamentos' | 'Relatórios' | 'Recorrências' | 'Ajustes'
-type ModalKind = 'expense' | 'recurrence' | 'settings' | 'backup' | 'easter-egg' | 'onboarding' | 'reset'
+type ModalKind = 'expense' | 'recurrence' | 'settings' | 'backup' | 'easter-egg' | 'onboarding' | 'reset' | 'confirm'
 type OnboardingStartMode = 'empty' | 'demo' | 'keep'
+type ConfirmDialog = { eyebrow: string; title: string; description: string; confirmLabel: string; onConfirm: () => void }
 
 const MODAL_CLOSE_DURATION_MS = 220
+const TOAST_AUTO_DISMISS_MS = 3800
+const CATEGORY_COLOR_PRESETS = [
+  { color: '#6e7f72', label: 'Verde sálvia' },
+  { color: '#b88b63', label: 'Terracota suave' },
+  { color: '#74858b', label: 'Azul ardósia' },
+  { color: '#9b8193', label: 'Malva' },
+  { color: '#8b966d', label: 'Oliva' },
+  { color: '#c46b5c', label: 'Coral' },
+  { color: '#5b8a72', label: 'Esmeralda' },
+  { color: '#6a7ba2', label: 'Índigo' },
+  { color: '#c89b54', label: 'Âmbar' },
+  { color: '#866f9b', label: 'Lavanda' },
+  { color: '#5d8b96', label: 'Petróleo' },
+  { color: '#a36877', label: 'Rosé' },
+]
 
 // Dicionário de senhas secretas do Konami Code (chave em minúsculas -> escrita exibida no modal)
 const EASTER_EGG_SECRETS: Record<string, string> = {
   bbkart: 'Bloodborne Kart não existe e não pode te machucar',
   'ocara': 'O Caio é o cara',
   '13': 'Lulatron Ativar',
+  '67': 'Aura farmada com Sucesso',
+  bleach: 'Getsuga Tensho',
 }
 const getEasterEggSecret = (value: string): string | undefined => EASTER_EGG_SECRETS[value.trim().toLowerCase()]
 
@@ -54,12 +72,33 @@ function App() {
   const [onboardingOpen, setOnboardingOpen] = useState(() => localStorage.getItem('poe-na-conta-onboarded') !== '1')
   const [onboardingStartMode, setOnboardingStartMode] = useState<OnboardingStartMode>(() => hasExistingData ? 'keep' : 'empty')
   const [backupMessage, setBackupMessage] = useState('')
+  const [toastClosing, setToastClosing] = useState(false)
+  const [toastKey, setToastKey] = useState(0)
   const [pendingBackupImport, setPendingBackupImport] = useState<BackupPayload | null>(null)
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialog | null>(null)
   const [resetDataModalOpen, setResetDataModalOpen] = useState(false)
   const [resetConfirmText, setResetConfirmText] = useState('')
   const [resetConfirmError, setResetConfirmError] = useState(false)
   const backupInput = useRef<HTMLInputElement>(null)
   const trendChartRef = useRef<HTMLDivElement>(null)
+  const showToast = (message: string) => {
+    if (!message) {
+      setBackupMessage('')
+      setToastClosing(false)
+      return
+    }
+    setToastClosing(false)
+    setBackupMessage(message)
+    setToastKey(current => current + 1)
+  }
+  const dismissToast = () => {
+    if (!backupMessage || toastClosing) return
+    setToastClosing(true)
+    window.setTimeout(() => {
+      setBackupMessage('')
+      setToastClosing(false)
+    }, MODAL_CLOSE_DURATION_MS)
+  }
   const [month, setMonth] = useState(monthKey(today))
   const [view, setView] = useState<MainView>(() => { const saved = localStorage.getItem('nexus-default-view'); return saved === 'Lançamentos' || saved === 'Relatórios' || saved === 'Recorrências' || saved === 'Ajustes' ? saved : 'Visão geral' })
   const [defaultView, setDefaultView] = useState<MainView>(() => { const saved = localStorage.getItem('nexus-default-view'); return saved === 'Lançamentos' || saved === 'Relatórios' || saved === 'Recorrências' || saved === 'Ajustes' ? saved : 'Visão geral' })
@@ -90,15 +129,32 @@ function App() {
   const [recurrenceEditor, setRecurrenceEditor] = useState<RecurrenceEditor | null>(null)
   const [recurrenceSelection, setRecurrenceSelection] = useState<string[] | null>(null)
   const [selectedExpenseIds, setSelectedExpenseIds] = useState<string[]>([])
-  const [form, setForm] = useState<ExpenseForm>(() => ({ description: '', amount: '', date: dateKey(today), category: storedData.data.categories[0]?.id || '', method: 'PIX', cardId: storedData.data.cards[0]?.id || '', installments: '1', shares: [] }))
+  const [form, setForm] = useState<ExpenseForm>(() => ({ description: '', amount: '', date: dateKey(today), category: storedData.data.categories[0]?.id || '', method: 'PIX', cardId: storedData.data.cards[0]?.id || '', installments: '2', shares: [] }))
   const [shareError, setShareError] = useState('')
+  const [expenseErrors, setExpenseErrors] = useState<Record<string, string>>({})
+  const [recurrenceErrors, setRecurrenceErrors] = useState<Record<string, string>>({})
+  const [settingsErrors, setSettingsErrors] = useState<Record<string, string>>({})
+  const [formShake, setFormShake] = useState<ModalKind | null>(null)
   const [returnToExpenseAfterParticipant, setReturnToExpenseAfterParticipant] = useState(false)
+  const triggerFormShake = (kind: ModalKind) => {
+    setFormShake(null)
+    window.requestAnimationFrame(() => setFormShake(kind))
+  }
+  const clearFieldError = (setter: React.Dispatch<React.SetStateAction<Record<string, string>>>, key: string) => {
+    setter(current => {
+      if (!current[key]) return current
+      const next = { ...current }
+      delete next[key]
+      return next
+    })
+  }
   const normalizedFormDate = normalizeDateInput(form.date)
   const selectedFormCard = data.cards.find(card => card.id === form.cardId) || data.cards[0]
   const creditDueMonth = form.method.startsWith('Crédito') && selectedFormCard && isDate(normalizedFormDate) ? calculateCardDueMonth(normalizedFormDate, selectedFormCard) : ''
   const openNewExpenseModal = () => {
     setEditingExpenseId(null)
     setShareError('')
+    setExpenseErrors({})
     setForm({
       description: '',
       amount: '',
@@ -106,7 +162,7 @@ function App() {
       category: data.categories[0]?.id || '',
       method: 'PIX',
       cardId: data.cards[0]?.id || '',
-      installments: '1',
+      installments: '2',
       shares: [],
     })
     setModal(true)
@@ -121,6 +177,23 @@ function App() {
       onClosed()
     }, MODAL_CLOSE_DURATION_MS)
   }
+  useEffect(() => {
+    if (!backupMessage) return
+    const fadeTimer = window.setTimeout(() => setToastClosing(true), TOAST_AUTO_DISMISS_MS - MODAL_CLOSE_DURATION_MS)
+    const clearTimer = window.setTimeout(() => {
+      setBackupMessage('')
+      setToastClosing(false)
+    }, TOAST_AUTO_DISMISS_MS)
+    return () => {
+      window.clearTimeout(fadeTimer)
+      window.clearTimeout(clearTimer)
+    }
+  }, [backupMessage, toastKey])
+  useEffect(() => {
+    if (!profileMessage) return
+    const timer = window.setTimeout(() => setProfileMessage(''), TOAST_AUTO_DISMISS_MS)
+    return () => window.clearTimeout(timer)
+  }, [profileMessage])
   useEffect(() => {
     const closeMenus = (event: MouseEvent) => {
       if (!(event.target instanceof Element) || !event.target.closest('.row-actions')) document.querySelectorAll<HTMLDetailsElement>('.row-actions[open]').forEach(menu => menu.removeAttribute('open'))
@@ -200,11 +273,12 @@ function App() {
   }, [])
   const closeSettingsModal = () => closeModalWithAnimation('settings', () => {
     setSettingsModal(null)
+    setSettingsErrors({})
     if (returnToExpenseAfterParticipant) { setReturnToExpenseAfterParticipant(false); setModal(true) }
   })
   const save = (next: Data, recoveringStorage = false): boolean => {
     if (storageWarning && !recoveringStorage) {
-      setBackupMessage('Importe um backup válido ou desbloqueie o armazenamento no aviso acima antes de salvar.')
+      showToast('Importe um backup válido ou desbloqueie o armazenamento no aviso acima antes de salvar.')
       return false
     }
     try {
@@ -213,7 +287,7 @@ function App() {
       setStorageWarning('')
       return true
     } catch {
-      setBackupMessage('Não foi possível salvar no navegador. Verifique o espaço disponível ou as permissões de armazenamento.')
+      showToast('Não foi possível salvar no navegador. Verifique o espaço disponível ou as permissões de armazenamento.')
       return false
     }
   }
@@ -304,17 +378,31 @@ function App() {
   const recurrences = data.recurrences || []
   const pendingRecurrences = recurrences.filter(item => item.active && !item.generatedMonths.includes(month) && !item.skippedMonths.includes(month))
   const selectedRecurrences = recurrenceSelection ?? pendingRecurrences.map(item => item.id)
-  const openRecurrence = (item?: Recurrence) => setRecurrenceEditor({ id: item?.id, description: item?.description || '', amount: item ? String(item.amount) : '', category: item?.category || data.categories[0]?.id || '', method: item?.method || 'PIX', cardId: item?.cardId || data.cards[0]?.id || '', day: String(item?.day || 1) })
-  const closeRecurrenceModal = () => closeModalWithAnimation('recurrence', () => setRecurrenceEditor(null))
+  const openRecurrence = (item?: Recurrence) => {
+    setRecurrenceErrors({})
+    setRecurrenceEditor({ id: item?.id, description: item?.description || '', amount: item ? formatMoneyInput(item.amount) : '', category: item?.category || data.categories[0]?.id || '', method: item?.method || 'PIX', cardId: item?.cardId || data.cards[0]?.id || '', day: String(item?.day || 1) })
+  }
+  const closeRecurrenceModal = () => closeModalWithAnimation('recurrence', () => { setRecurrenceEditor(null); setRecurrenceErrors({}) })
   const saveRecurrence = (event: React.FormEvent) => {
     event.preventDefault()
     if (!recurrenceEditor) return
+    const nextErrors: Record<string, string> = {}
+    if (!recurrenceEditor.description.trim()) nextErrors.description = 'Informe uma descrição para a recorrência.'
     const amount = parseMoneyInput(recurrenceEditor.amount)
+    if (!recurrenceEditor.amount.trim()) nextErrors.amount = 'Informe o valor mensal.'
+    else if (!Number.isFinite(amount) || amount <= 0) nextErrors.amount = 'Informe um valor maior que zero.'
     const day = Number(recurrenceEditor.day)
-    if (!recurrenceEditor.description.trim() || !Number.isFinite(amount) || amount <= 0 || !Number.isInteger(day) || day < 1 || day > 31) return
+    if (!recurrenceEditor.day.trim() || !Number.isInteger(day) || day < 1 || day > 31) nextErrors.day = 'Informe um dia entre 1 e 31.'
+    if (Object.keys(nextErrors).length > 0) {
+      setRecurrenceErrors(nextErrors)
+      triggerFormShake('recurrence')
+      return
+    }
+    setRecurrenceErrors({})
     const previous = recurrenceEditor.id ? recurrences.find(value => value.id === recurrenceEditor.id) : undefined
     const item: Recurrence = { id: recurrenceEditor.id || createId(), description: recurrenceEditor.description.trim(), amount, category: recurrenceEditor.category || data.categories[0]?.id || '', method: recurrenceEditor.method, cardId: recurrenceEditor.method.startsWith('Crédito') ? (recurrenceEditor.cardId || data.cards[0]?.id || undefined) : undefined, day, active: previous?.active ?? true, generatedMonths: previous?.generatedMonths || [], skippedMonths: previous?.skippedMonths || [] }
     if (save({ ...data, recurrences: recurrenceEditor.id ? recurrences.map(value => value.id === item.id ? item : value) : [...recurrences, item] })) {
+      showToast(recurrenceEditor.id ? 'Recorrência atualizada.' : 'Recorrência criada.')
       closeRecurrenceModal()
     }
   }
@@ -328,26 +416,43 @@ function App() {
       return { id: createId(), description: item.description, amount: item.amount, date, category: item.category, method: item.method, cardId: card?.id, installments: 1, firstMonth }
     })
     const ids = new Set(chosen.map(item => item.id))
-    save({ ...data, expenses: [...generated, ...data.expenses], recurrences: recurrences.map(item => ids.has(item.id) ? { ...item, generatedMonths: [...item.generatedMonths, month] } : item) })
+    if (save({ ...data, expenses: [...generated, ...data.expenses], recurrences: recurrences.map(item => ids.has(item.id) ? { ...item, generatedMonths: [...item.generatedMonths, month] } : item) })) {
+      showToast(chosen.length === 1 ? '1 recorrência lançada no mês.' : `${chosen.length} recorrências lançadas no mês.`)
+    }
     setRecurrenceSelection(null)
   }
   const skipRecurrence = (id: string) => { setRecurrenceSelection(selectedRecurrences.filter(value => value !== id)); save({ ...data, recurrences: recurrences.map(item => item.id === id ? { ...item, skippedMonths: [...item.skippedMonths, month] } : item) }) }
 
   const addExpense = (ev: React.FormEvent) => {
     ev.preventDefault()
+    const nextErrors: Record<string, string> = {}
     const description = form.description.trim()
-    if (!description) { setShareError('Informe uma descrição para o lançamento.'); return }
+    if (!description) nextErrors.description = 'Informe uma descrição para o lançamento.'
     const amount = parseMoneyInput(form.amount)
-    if (!Number.isFinite(amount) || amount <= 0) { setShareError('Informe um valor válido maior que zero (ex.: 150,50).'); return }
+    if (!form.amount.trim()) nextErrors.amount = 'Informe o valor da despesa.'
+    else if (!Number.isFinite(amount) || amount <= 0) nextErrors.amount = 'Informe um valor maior que zero (ex.: 150,50).'
     const normalizedDate = normalizeDateInput(form.date)
-    if (!isDate(normalizedDate)) { setShareError('Informe uma data válida.'); return }
-    const n = Math.round(Number(form.installments) || 1)
-    if (form.method === 'Crédito parcelado' && (n < 2 || n > 60)) { setShareError('Informe entre 2 e 60 parcelas.'); return }
+    if (!form.date.trim() || !isDate(normalizedDate)) nextErrors.date = 'Informe uma data válida.'
+    const rawInstallments = Number(form.installments)
+    const n = Math.round(rawInstallments || 1)
+    if (form.method === 'Crédito parcelado' && (!form.installments.trim() || !Number.isInteger(rawInstallments) || n < 2 || n > 60)) {
+      nextErrors.installments = 'Informe entre 2 e 60 parcelas.'
+    }
     for (const share of form.shares) {
-      if (share.amount.trim() !== '') {
+      if (!share.amount.trim()) {
+        nextErrors[`share-${share.participantId}`] = 'Informe o valor desta pessoa ou desmarque-a.'
+      } else {
         const parsedShare = parseMoneyInput(share.amount)
-        if (!Number.isFinite(parsedShare) || parsedShare < 0) { setShareError('Informe um valor válido para a divisão com participantes.'); return }
+        if (!Number.isFinite(parsedShare) || parsedShare <= 0) {
+          nextErrors[`share-${share.participantId}`] = 'Informe um valor válido maior que zero.'
+        }
       }
+    }
+    if (Object.keys(nextErrors).length > 0) {
+      setExpenseErrors(nextErrors)
+      setShareError('')
+      triggerFormShake('expense')
+      return
     }
     const shares = form.shares.map(share => ({ participantId: share.participantId, amount: parseMoneyInput(share.amount) || 0, installment: form.method === 'Crédito parcelado' && share.installment !== 'all' ? Number(share.installment) : undefined })).filter(share => share.amount > 0)
     const count = form.method === 'Crédito parcelado' ? Math.max(1, n) : 1
@@ -356,35 +461,45 @@ function App() {
     const allocated = Array.from({ length: count }, () => 0)
     for (const share of shares) {
       const cents = Math.round(share.amount * 100)
-      if (share.installment && share.installment > count) { setShareError('Uma atribuição aponta para uma parcela que não existe. Ajuste o número de parcelas ou a seleção.'); return }
+      if (share.installment && share.installment > count) { setShareError('Uma atribuição aponta para uma parcela que não existe. Ajuste o número de parcelas ou a seleção.'); triggerFormShake('expense'); return }
       if (share.installment) allocated[share.installment - 1] += cents
       else for (let i = 0; i < count; i++) allocated[i] += Math.floor(cents / count) + (i < cents % count ? 1 : 0)
     }
-    if (allocated.some((cents, i) => cents > partValues[i])) { setShareError('A soma atribuída aos participantes não pode superar o valor da parcela correspondente.'); return }
+    if (allocated.some((cents, i) => cents > partValues[i])) { setShareError('A soma atribuída aos participantes não pode superar o valor da parcela correspondente.'); triggerFormShake('expense'); return }
+    setExpenseErrors({})
+    setShareError('')
     const card = form.method.startsWith('Crédito') ? (data.cards.find(c => c.id === form.cardId) || data.cards[0]) : undefined
     const firstMonth = form.method.startsWith('Crédito') && card ? calculateCardDueMonth(normalizedDate, card) : monthKey(new Date(`${normalizedDate}T12:00:00`))
     const entry: Expense = { id: editingExpenseId || createId(), description, amount, date: normalizedDate, category: form.category || data.categories[0]?.id || '', method: form.method, cardId: card?.id, installments: form.method === 'Crédito parcelado' ? Math.max(1, n) : 1, firstMonth, shares }
     if (!save({ ...data, expenses: editingExpenseId ? data.expenses.map(e => e.id === editingExpenseId ? entry : e) : [entry, ...data.expenses] })) return
-    if (!editingExpenseId && firstMonth !== month) {
-      setBackupMessage(`Lançamento salvo em ${monthName(firstMonth)}.`)
+    if (editingExpenseId) {
+      showToast('Alterações salvas no lançamento.')
+    } else if (firstMonth !== month) {
+      showToast(`Lançamento salvo em ${monthName(firstMonth)}.`)
+    } else {
+      showToast('Lançamento adicionado.')
     }
     closeModalWithAnimation('expense', () => {
       setModal(false)
       setEditingExpenseId(null)
       setShareError('')
-      setForm({ ...form, description: '', amount: '', date: normalizedDate, category: entry.category, cardId: card?.id || data.cards[0]?.id || '', installments: '1', shares: [] })
+      setExpenseErrors({})
+      setForm({ ...form, description: '', amount: '', date: normalizedDate, category: entry.category, cardId: card?.id || data.cards[0]?.id || '', installments: '2', shares: [] })
     })
   }
   const editExpense = (expense: Expense) => {
     setEditingExpenseId(expense.id)
-    setForm({ description: expense.description, amount: String(expense.amount), date: expense.date, category: expense.category || data.categories[0]?.id || '', method: expense.method, cardId: expense.cardId || data.cards[0]?.id || '', installments: String(expense.installments), shares: (expense.shares || []).map(share => ({ participantId: share.participantId, amount: String(share.amount), installment: share.installment ? String(share.installment) : 'all' })) })
+    setForm({ description: expense.description, amount: formatMoneyInput(expense.amount), date: expense.date, category: expense.category || data.categories[0]?.id || '', method: expense.method, cardId: expense.cardId || data.cards[0]?.id || '', installments: String(expense.installments > 1 ? expense.installments : 2), shares: (expense.shares || []).map(share => ({ participantId: share.participantId, amount: formatMoneyInput(share.amount), installment: share.installment ? String(share.installment) : 'all' })) })
     setShareError('')
+    setExpenseErrors({})
     setModal(true)
   }
-  const closeExpenseModal = () => closeModalWithAnimation('expense', () => { setModal(false); setEditingExpenseId(null); setShareError('') })
+  const closeExpenseModal = () => closeModalWithAnimation('expense', () => { setModal(false); setEditingExpenseId(null); setShareError(''); setExpenseErrors({}) })
+  const closeConfirmDialog = () => closeModalWithAnimation('confirm', () => setConfirmDialog(null))
   const deleteExpense = (id: string) => {
     if (save({ ...data, expenses: data.expenses.filter(e => e.id !== id) })) {
       setSelectedExpenseIds(current => current.filter(item => item !== id))
+      showToast('Lançamento excluído.')
     }
   }
   const toggleSelectExpense = (id: string, checked: boolean) => {
@@ -399,25 +514,37 @@ function App() {
   }
   const deleteSelectedExpenses = () => {
     if (!selectedVisibleIds.length) return
-    const count = selectedVisibleIds.length
-    if (!window.confirm(count === 1 ? 'Excluir o lançamento selecionado?' : `Excluir os ${count} lançamentos selecionados?`)) return
-    const toDelete = new Set(selectedVisibleIds)
-    if (save({ ...data, expenses: data.expenses.filter(e => !toDelete.has(e.id)) })) {
-      setSelectedExpenseIds(current => current.filter(id => !toDelete.has(id)))
-      setBackupMessage(count === 1 ? '1 lançamento excluído.' : `${count} lançamentos excluídos.`)
-    }
+    const idsToDelete = [...selectedVisibleIds]
+    const count = idsToDelete.length
+    setConfirmDialog({
+      eyebrow: 'CONFIRMAR EXCLUSÃO',
+      title: count === 1 ? 'Excluir lançamento selecionado?' : `Excluir ${count} lançamentos selecionados?`,
+      description: count === 1
+        ? 'O lançamento selecionado será removido permanentemente da sua lista de despesas.'
+        : `Os ${count} lançamentos selecionados serão removidos permanentemente da sua lista de despesas.`,
+      confirmLabel: count === 1 ? 'Excluir lançamento' : `Excluir ${count} lançamentos`,
+      onConfirm: () => {
+        const toDelete = new Set(idsToDelete)
+        if (save({ ...data, expenses: data.expenses.filter(e => !toDelete.has(e.id)) })) {
+          setSelectedExpenseIds(current => current.filter(id => !toDelete.has(id)))
+          showToast(count === 1 ? '1 lançamento excluído.' : `${count} lançamentos excluídos.`)
+        }
+        closeConfirmDialog()
+      },
+    })
   }
   const downloadCsv = () => {
     const rows = [['Descrição','Valor da parcela','Parte pessoal','A receber','Parcela','Mês','Categoria','Pagamento','Participantes'], ...current.map(e => [e.description, e.value.toFixed(2), personalValue(e).toFixed(2), e.allocatedShares.reduce((sum, share) => sum + share.amount, 0).toFixed(2), `${e.part}/${e.installments}`, e.month, data.categories.find(c => c.id === e.category)?.name || '', e.method, e.allocatedShares.map(share => data.participants?.find(p => p.id === share.participantId)?.name || 'Participante').join(', ')])]
     const untrustedColumns = new Set([0, 6, 7, 8])
     const blob = new Blob(['\ufeff' + rows.map(row => row.map((cell, index) => csvCell(cell, untrustedColumns.has(index))).join(';')).join('\n')], { type: 'text/csv;charset=utf-8' })
     const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `relatorio-${month}.csv`; a.click(); URL.revokeObjectURL(url)
+    showToast('Relatório CSV exportado.')
   }
   const downloadBackup = () => {
-    if (storageWarning) { setBackupMessage('Importe um backup válido antes de baixar uma cópia dos dados.'); return }
+    if (storageWarning) { showToast('Importe um backup válido antes de baixar uma cópia dos dados.'); return }
     const blob = new Blob([createBackup(data, { monthlyLimit, limitNoticePercent: String(limitNoticePercentValue), defaultView, theme, profileName, profilePhoto })], { type: 'application/json;charset=utf-8' })
     const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `poe-na-conta-backup-${new Date().toISOString().slice(0, 10)}.json`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000)
-    setBackupMessage('Backup baixado. Guarde o arquivo em um local seguro.')
+    showToast('Backup baixado. Guarde o arquivo em um local seguro.')
   }
   const applyBackupPayload = (payload: BackupPayload) => {
     save(payload.data, true)
@@ -437,14 +564,14 @@ function App() {
       if (payload.preferences.profilePhoto !== undefined) { setProfilePhoto(payload.preferences.profilePhoto); if (payload.preferences.profilePhoto) localStorage.setItem('poe-na-conta-profile-photo', payload.preferences.profilePhoto); else localStorage.removeItem('poe-na-conta-profile-photo') }
     }
     localStorage.setItem('poe-na-conta-onboarded', '1')
-    setBackupMessage('Backup importado com sucesso.')
+    showToast('Backup importado com sucesso.')
   }
   const importBackup = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     if (!file) return
     try {
       const imported = parseBackupFile(await file.text())
-      if (!imported) { setBackupMessage('Este arquivo não é um backup válido do Põe na Conta.'); return }
+      if (!imported) { showToast('Este arquivo não é um backup válido do Põe na Conta.'); return }
       if (onboardingOpen) {
         applyBackupPayload(imported)
         setProfileMessage('')
@@ -452,9 +579,9 @@ function App() {
         return
       }
       setPendingBackupImport(imported)
-      setBackupMessage('')
+      showToast('')
     } catch {
-      setBackupMessage('Não foi possível ler o arquivo selecionado.')
+      showToast('Não foi possível ler o arquivo selecionado.')
     } finally {
       event.target.value = ''
     }
@@ -493,6 +620,7 @@ function App() {
     event.preventDefault()
     if (resetConfirmText.trim().toLocaleUpperCase('pt-BR') !== 'EXCLUIR') {
       setResetConfirmError(true)
+      triggerFormShake('reset')
       return
     }
     const keysToRemove = [
@@ -531,21 +659,49 @@ function App() {
     })
   }
   const closeBackupConfirmModal = () => closeModalWithAnimation('backup', () => setPendingBackupImport(null))
-  const openCategory = (category?: Category) => setSettingsModal({ kind: 'category', id: category?.id, name: category?.name || '', color: category?.color || '#6e7f72', closingDay: '25', dueDay: '5' })
-  const openCard = (card?: Card) => setSettingsModal({ kind: 'card', id: card?.id, name: card?.name || '', color: '#65a987', closingDay: String(card?.closingDay || 25), dueDay: String(card?.dueDay || 5) })
-  const openParticipant = (participant?: Participant) => setSettingsModal({ kind: 'participant', id: participant?.id, name: participant?.name || '', color: '#65a987', closingDay: '25', dueDay: '5' })
+  const openCategory = (category?: Category) => { setSettingsErrors({}); setSettingsModal({ kind: 'category', id: category?.id, name: category?.name || '', color: category?.color || '#6e7f72', closingDay: '25', dueDay: '5' }) }
+  const openCard = (card?: Card) => { setSettingsErrors({}); setSettingsModal({ kind: 'card', id: card?.id, name: card?.name || '', color: '#65a987', closingDay: String(card?.closingDay || 25), dueDay: String(card?.dueDay || 5) }) }
+  const openParticipant = (participant?: Participant) => { setSettingsErrors({}); setSettingsModal({ kind: 'participant', id: participant?.id, name: participant?.name || '', color: '#65a987', closingDay: '25', dueDay: '5' }) }
   const addParticipantFromExpense = () => { setReturnToExpenseAfterParticipant(true); closeModalWithAnimation('expense', () => { setModal(false); openParticipant() }) }
   const saveSetting = (ev: React.FormEvent) => {
     ev.preventDefault(); if (!settingsModal) return
     const { kind, id, name, color, closingDay, dueDay } = settingsModal
-    if (kind === 'category') { const category: Category = { id: id || createId(), name: name.trim(), color }; if (!save({ ...data, categories: id ? data.categories.map(c => c.id === id ? category : c) : [...data.categories, category] })) return }
-    else if (kind === 'card') { const close = Number(closingDay); const due = Number(dueDay); if (close < 1 || close > 31 || due < 1 || due > 31) return; const card: Card = { id: id || createId(), name: name.trim(), closingDay: close, dueDay: due }; if (!save({ ...data, cards: id ? data.cards.map(c => c.id === id ? card : c) : [...data.cards, card] })) return }
-    else { const participant: Participant = { id: id || createId(), name: name.trim() }; if (!save({ ...data, participants: id ? (data.participants || []).map(p => p.id === id ? participant : p) : [...(data.participants || []), participant] })) return }
+    const nextErrors: Record<string, string> = {}
+    if (!name.trim()) nextErrors.name = kind === 'category' ? 'Informe o nome da categoria.' : kind === 'card' ? 'Informe o nome do cartão.' : 'Informe o nome do participante.'
+    if (kind === 'category' && !/^#[0-9a-fA-F]{6}$/.test(color.trim())) {
+      nextErrors.color = 'Informe uma cor hexadecimal válida (ex.: #6E7F72).'
+    }
+    const close = Number(closingDay)
+    const due = Number(dueDay)
+    if (kind === 'card') {
+      if (!closingDay.trim() || !Number.isInteger(close) || close < 1 || close > 31) nextErrors.closingDay = 'Informe um dia entre 1 e 31.'
+      if (!dueDay.trim() || !Number.isInteger(due) || due < 1 || due > 31) nextErrors.dueDay = 'Informe um dia entre 1 e 31.'
+    }
+    if (Object.keys(nextErrors).length > 0) {
+      setSettingsErrors(nextErrors)
+      triggerFormShake('settings')
+      return
+    }
+    setSettingsErrors({})
+    if (kind === 'category') { const category: Category = { id: id || createId(), name: name.trim(), color: color.trim().toLowerCase() }; if (!save({ ...data, categories: id ? data.categories.map(c => c.id === id ? category : c) : [...data.categories, category] })) return; showToast(id ? 'Categoria atualizada.' : 'Categoria criada.') }
+    else if (kind === 'card') { const card: Card = { id: id || createId(), name: name.trim(), closingDay: close, dueDay: due }; if (!save({ ...data, cards: id ? data.cards.map(c => c.id === id ? card : c) : [...data.cards, card] })) return; showToast(id ? 'Cartão atualizado.' : 'Cartão criado.') }
+    else { const participant: Participant = { id: id || createId(), name: name.trim() }; if (!save({ ...data, participants: id ? (data.participants || []).map(p => p.id === id ? participant : p) : [...(data.participants || []), participant] })) return; showToast(id ? 'Participante atualizado.' : 'Participante adicionado.') }
     closeSettingsModal()
   }
   const removeParticipant = (id: string) => {
-    if (!window.confirm('Remover este participante e apagar suas atribuições dos lançamentos?')) return
-    save({ ...data, participants: (data.participants || []).filter(p => p.id !== id), expenses: data.expenses.map(e => ({ ...e, shares: (e.shares || []).filter(share => share.participantId !== id) })) })
+    const participant = (data.participants || []).find(p => p.id === id)
+    setConfirmDialog({
+      eyebrow: 'CONFIRMAR EXCLUSÃO',
+      title: participant ? `Remover ${participant.name}?` : 'Remover participante?',
+      description: 'Este participante será removido e suas atribuições serão apagadas dos lançamentos.',
+      confirmLabel: 'Remover participante',
+      onConfirm: () => {
+        if (save({ ...data, participants: (data.participants || []).filter(p => p.id !== id), expenses: data.expenses.map(e => ({ ...e, shares: (e.shares || []).filter(share => share.participantId !== id) })) })) {
+          showToast('Participante removido.')
+        }
+        closeConfirmDialog()
+      },
+    })
   }
 
   const transactionTable = <section className="panel transactions data-page-table">
@@ -566,7 +722,7 @@ function App() {
   return <div className="app-shell" data-theme={theme}>
     <input ref={backupInput} type="file" accept="application/json,.json" hidden onChange={importBackup} />
     <input ref={profilePhotoInput} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={updateProfilePhoto} />
-    {backupMessage && <div className="backup-toast" role="status" aria-live="polite">{backupMessage}<button type="button" aria-label="Dispensar aviso" onClick={() => setBackupMessage('')}>×</button></div>}
+    {backupMessage && <div className={`backup-toast ${toastClosing ? 'is-closing' : ''}`} role="status" aria-live="polite"><span>{backupMessage}</span><button type="button" aria-label="Dispensar aviso" onClick={dismissToast}>×</button></div>}
     <header className="site-header"><a className="brand" href="#" onClick={() => setView('Visão geral')}><span className="brand-mark"><svg viewBox="0 0 48 48" shapeRendering="crispEdges" aria-hidden="true"><rect x="1" y="1" width="46" height="46" rx="13" fill="#20231f"/><path d="M18 6h12v3h6v6h3v6h3v12h-3v6h-6v3H18v-3h-6v-6H9v-6H6V18h3v-6h6V9h3z" fill="#986027"/><path d="M18 9h12v3h6v6h3v12h-3v6h-6v3H18v-3h-6v-6H9V18h3v-6h6z" fill="#e8b957"/><path d="M18 12h12v3h6v3h-3v3h-3v-3H18v-3h-3v-3h3z" fill="#f6d77e"/><rect x="22" y="14" width="4" height="20" fill="#80501f"/><rect x="18" y="17" width="12" height="3" fill="#80501f"/><rect x="15" y="20" width="3" height="3" fill="#80501f"/><rect x="18" y="23" width="12" height="3" fill="#80501f"/><rect x="27" y="26" width="3" height="3" fill="#80501f"/><rect x="18" y="29" width="12" height="3" fill="#80501f"/><rect x="12" y="18" width="3" height="6" fill="#f6d77e"/></svg></span><span>Põe na Conta<small>GESTÃO FINANCEIRA</small></span></a><div className="side-label">MENU</div><nav aria-label="Navegação principal">{(['Visão geral','Lançamentos','Relatórios','Recorrências'] as const).map((v, i) => <button key={v} className={`nav-item ${view === v ? 'active' : ''}`} onClick={() => setView(v)}><span className="nav-icon">{['◫','↔','▥','↻'][i]}</span><span className="nav-label">{v}</span></button>)}<button className={`nav-item mobile-settings-nav ${view === 'Ajustes' ? 'active' : ''}`} onClick={() => setView('Ajustes')}><span className="nav-icon">⚙</span><span className="nav-label">Ajustes</span></button></nav><div className="side-bottom"><button className={`theme-switch header-theme-switch ${theme === 'dark' ? 'is-dark' : ''}`} onClick={toggleTheme} aria-label={theme === 'dark' ? 'Ativar tema claro' : 'Ativar tema escuro'}><span className="theme-switch-track" aria-hidden="true"><span className="theme-switch-thumb">{theme === 'dark' ? <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4" /><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42" /></svg> : <svg viewBox="0 0 24 24"><path d="M20.2 15.4A8.5 8.5 0 0 1 8.6 3.8 8.5 8.5 0 1 0 20.2 15.4Z" /></svg>}</span></span><span className="theme-switch-label">{theme === 'dark' ? 'Tema claro' : 'Tema escuro'}</span></button><div className="profile"><div className={`avatar profile-avatar ${profilePhoto ? 'has-photo' : ''}`}>{profilePhoto ? <img src={profilePhoto} alt="" /> : profileName.trim() ? profileInitials(profileName) : <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></svg>}</div><div><b>Meu espaço</b><span>{profileName.trim() || 'Plano pessoal'}</span></div><details className="row-actions profile-actions"><summary aria-label="Abrir opções do Meu espaço" title="Opções">···</summary><div className={`row-action-menu ${theme === 'dark' ? 'is-dark' : 'is-light'}`}><button onClick={event => closeActionMenu(event, () => setView('Ajustes'))}>Preferências</button><button onClick={event => closeActionMenu(event, downloadBackup)}>Exportar backup</button><button onClick={event => closeActionMenu(event, () => backupInput.current?.click())}>Importar backup</button></div></details></div></div></header>
     <main className="main"><header className="topbar"><div className="breadcrumb">Põe na Conta <span>/</span> {view}</div><div className="top-actions"><span className="today">◷ &nbsp;{new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' }).format(today)}</span><div className={`avatar small profile-avatar ${profilePhoto ? 'has-photo' : ''}`}>{profilePhoto ? <img src={profilePhoto} alt="" /> : profileName.trim() ? profileInitials(profileName) : <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></svg>}</div></div></header>
       <div className="content" key={view}>
@@ -576,16 +732,16 @@ function App() {
         {view !== 'Ajustes' && monthlyLimitValue > 0 && <section className={`monthly-limit ${monthlyLimitNotice ? 'is-warning' : ''}`} role="status" aria-live="polite"><div className="monthly-limit-heading"><span>Limite mensal · {monthName(month)}</span><b>{money(total)} de {money(monthlyLimitValue)}</b></div><div className="monthly-limit-track" role="progressbar" aria-label="Uso do limite mensal" aria-valuemin={0} aria-valuemax={monthlyLimitValue} aria-valuenow={Math.min(total, monthlyLimitValue)}><i style={{ width: `${Math.min(monthlyLimitProgress, 100)}%` }} /></div><p>{monthlyLimitNotice ? monthlyLimitProgress > 100 ? `Teto mensal ultrapassado: você já usou ${Math.round(monthlyLimitProgress)}% do seu limite pessoal.` : `Você atingiu ${limitNoticePercentValue}% do limite mensal que definiu.` : `Avisaremos ao atingir ${limitNoticePercentValue}% (${money(monthlyLimitValue * limitNoticePercentValue / 100)}).`}</p></section>}
 
         {view === 'Ajustes' ? <section className="settings-grid">
-          <div className="panel settings-panel preference-panel" id="preferences-panel"><div className="panel-head"><div><h2>Preferências</h2><p>Personalize como o Põe na Conta abre e aparece.</p></div><span className="calendar-icon">⚙</span></div><div className="profile-preferences"><h3>Perfil</h3><p>Defina como seu perfil aparece neste dispositivo.</p><label>Nome<input type="text" maxLength={60} placeholder="Seu nome" value={profileName} onChange={event => updateProfileName(event.target.value)} /></label><div className="profile-photo-actions"><button type="button" className="outline-btn" onClick={() => profilePhotoInput.current?.click()}>{profilePhoto ? 'Trocar foto' : 'Adicionar foto'}</button>{profilePhoto && <button type="button" className="text-btn" onClick={removeProfilePhoto}>Remover foto</button>}</div>{profileMessage && <small className="profile-message" role="status">{profileMessage}</small>}</div><div className="preference-controls"><label>Tela ao abrir<select value={defaultView} onChange={event => updateDefaultView(event.target.value as MainView)}><option>Visão geral</option><option>Lançamentos</option><option>Relatórios</option><option>Recorrências</option><option>Ajustes</option></select></label><label>Tema padrão<select value={defaultTheme} onChange={event => updateDefaultTheme(event.target.value as 'light' | 'dark')}><option value="light">Claro</option><option value="dark">Escuro</option></select></label></div><div className="budget-preferences"><h3>Limite de gastos por mês</h3><p>O limite considera apenas sua parte das despesas; valores de participantes ficam de fora.</p><div className="budget-preference-fields"><label>Teto mensal (R$)<input type="number" min="0" step="0.01" inputMode="decimal" placeholder="Ex.: 1000" value={monthlyLimit} onChange={event => updateMonthlyLimit(event.target.value)} /></label><label>Avisar ao atingir (%)<input type="number" min="1" max="100" step="1" placeholder="80" value={limitNoticePercent} onChange={event => updateLimitNoticePercent(event.target.value)} /></label></div></div></div>
-          <div className="panel settings-panel"><div className="panel-head"><div><h2>Categorias</h2><p>Organize e identifique seus gastos.</p></div><button className="outline-btn" onClick={() => openCategory()}>＋ Nova categoria</button></div>{data.categories.map(c => <div className="setting-row" key={c.id}><i className="dot" style={{ background: c.color }} /><b>{c.name}</b><details className="row-actions"><summary aria-label={`Ações para a categoria ${c.name}`} title="Ações">···</summary><div className={`row-action-menu ${theme === 'dark' ? 'is-dark' : 'is-light'}`}><button onClick={event => closeActionMenu(event, () => openCategory(c))}>Editar</button><button className="danger" onClick={event => closeActionMenu(event, () => save({ ...data, categories: data.categories.filter(x => x.id !== c.id) }))}>Remover</button></div></details></div>)}</div>
-          <div className="panel settings-panel"><div className="panel-head"><div><h2>Cartões</h2><p>Configure fechamento e vencimento da fatura.</p></div><button className="outline-btn" onClick={() => openCard()}>＋ Novo cartão</button></div>{data.cards.map(c => <div className="setting-row" key={c.id}><span className="card-icon">▣</span><b>{c.name}</b><span className="card-days">Fecha dia {c.closingDay} · Vence dia {c.dueDay}</span><details className="row-actions"><summary aria-label={`Ações para o cartão ${c.name}`} title="Ações">···</summary><div className={`row-action-menu ${theme === 'dark' ? 'is-dark' : 'is-light'}`}><button onClick={event => closeActionMenu(event, () => openCard(c))}>Editar</button><button className="danger" onClick={event => closeActionMenu(event, () => save({ ...data, cards: data.cards.filter(x => x.id !== c.id) }))}>Remover</button></div></details></div>)}</div>
+          <div className="panel settings-panel preference-panel" id="preferences-panel"><div className="panel-head"><div><h2>Preferências</h2><p>Personalize como o Põe na Conta abre e aparece.</p></div><span className="calendar-icon">⚙</span></div><div className="profile-preferences"><h3>Perfil</h3><p>Defina como seu perfil aparece neste dispositivo.</p><label>Nome<input type="text" maxLength={60} placeholder="Seu nome" value={profileName} onChange={event => updateProfileName(event.target.value)} /></label><div className="profile-photo-actions"><button type="button" className="outline-btn" onClick={() => profilePhotoInput.current?.click()}>{profilePhoto ? 'Trocar foto' : 'Adicionar foto'}</button>{profilePhoto && <button type="button" className="text-btn" onClick={removeProfilePhoto}>Remover foto</button>}</div>{profileMessage && <small className="profile-message" role="status">{profileMessage}</small>}</div><div className="preference-controls"><label>Tela ao abrir<select value={defaultView} onChange={event => updateDefaultView(event.target.value as MainView)}><option>Visão geral</option><option>Lançamentos</option><option>Relatórios</option><option>Recorrências</option><option>Ajustes</option></select></label><label>Tema padrão<select value={defaultTheme} onChange={event => updateDefaultTheme(event.target.value as 'light' | 'dark')}><option value="light">Claro</option><option value="dark">Escuro</option></select></label></div><div className="budget-preferences"><h3>Limite de gastos por mês</h3><p>O limite considera apenas sua parte das despesas; valores de participantes ficam de fora.</p><div className="budget-preference-fields"><label>Teto mensal<div className="money-input-wrap"><span className="money-prefix" aria-hidden="true">R$</span><input type="text" inputMode="decimal" enterKeyHint="done" onKeyDown={dismissKeyboardOnEnter} placeholder="0,00" value={monthlyLimit ? formatMoneyInput(Number(monthlyLimit)) : ''} onChange={event => { const formatted = formatMoneyInput(event.target.value); const parsed = parseMoneyInput(formatted); updateMonthlyLimit(parsed > 0 ? String(parsed) : '') }} /></div></label><label>Avisar ao atingir<div className="money-input-wrap"><input type="text" inputMode="numeric" enterKeyHint="done" onKeyDown={dismissKeyboardOnEnter} placeholder="80" value={limitNoticePercent} onChange={event => updateLimitNoticePercent(event.target.value.replace(/\D/g, '').slice(0, 3))} /><span className="money-suffix" aria-hidden="true">%</span></div></label></div></div></div>
+          <div className="panel settings-panel"><div className="panel-head"><div><h2>Categorias</h2><p>Organize e identifique seus gastos.</p></div><button className="outline-btn" onClick={() => openCategory()}>＋ Nova categoria</button></div>{data.categories.map(c => <div className="setting-row" key={c.id}><i className="dot" style={{ background: c.color }} /><b>{c.name}</b><details className="row-actions"><summary aria-label={`Ações para a categoria ${c.name}`} title="Ações">···</summary><div className={`row-action-menu ${theme === 'dark' ? 'is-dark' : 'is-light'}`}><button onClick={event => closeActionMenu(event, () => openCategory(c))}>Editar</button><button className="danger" onClick={event => closeActionMenu(event, () => { if (save({ ...data, categories: data.categories.filter(x => x.id !== c.id) })) showToast('Categoria removida.') })}>Remover</button></div></details></div>)}</div>
+          <div className="panel settings-panel"><div className="panel-head"><div><h2>Cartões</h2><p>Configure fechamento e vencimento da fatura.</p></div><button className="outline-btn" onClick={() => openCard()}>＋ Novo cartão</button></div>{data.cards.map(c => <div className="setting-row" key={c.id}><span className="card-icon">▣</span><b>{c.name}</b><span className="card-days">Fecha dia {c.closingDay} · Vence dia {c.dueDay}</span><details className="row-actions"><summary aria-label={`Ações para o cartão ${c.name}`} title="Ações">···</summary><div className={`row-action-menu ${theme === 'dark' ? 'is-dark' : 'is-light'}`}><button onClick={event => closeActionMenu(event, () => openCard(c))}>Editar</button><button className="danger" onClick={event => closeActionMenu(event, () => { if (save({ ...data, cards: data.cards.filter(x => x.id !== c.id) })) showToast('Cartão removido.') })}>Remover</button></div></details></div>)}</div>
           <div className="panel settings-panel"><div className="panel-head"><div><h2>Participantes</h2><p>Pessoas que dividem despesas com você.</p></div><button className="outline-btn" onClick={() => openParticipant()}>＋ Novo participante</button></div>{(data.participants || []).length ? (data.participants || []).map(participant => <div className="setting-row" key={participant.id}><span className="participant-avatar">{participant.name.slice(0, 1).toUpperCase()}</span><b>{participant.name}</b><details className="row-actions"><summary aria-label={`Ações para ${participant.name}`} title="Ações">···</summary><div className={`row-action-menu ${theme === 'dark' ? 'is-dark' : 'is-light'}`}><button onClick={event => closeActionMenu(event, () => openParticipant(participant))}>Editar</button><button className="danger" onClick={event => closeActionMenu(event, () => removeParticipant(participant.id))}>Remover</button></div></details></div>) : <div className="empty compact">Adicione pessoas para acompanhar o que elas precisam reembolsar.</div>}</div>
           <div className="panel backup"><h2>Seus dados</h2><p>Os lançamentos ficam salvos localmente neste navegador. Baixe um backup completo para preservar categorias, cartões, participantes e despesas.</p><div className="backup-actions"><button className="outline-btn" onClick={downloadBackup}>Baixar backup JSON</button><button className="outline-btn" onClick={() => backupInput.current?.click()}>Importar backup</button><button className="outline-btn" onClick={downloadCsv}>↓ Exportar mês em CSV</button><button type="button" className="danger-outline-btn" onClick={openResetDataModal}>Excluir dados</button></div>{storageWarning && <p className="backup-warning" role="alert">{storageWarning}</p>}</div>
         </section> : view === 'Recorrências' ? <section className="recurrence-page">
           <div className="panel recurrence-review"><div className="panel-head"><div><h2>Revisão de {monthName(month)}</h2><p>Confirme só as cobranças que aconteceram neste mês.</p></div><span className="stat-symbol muted">↻</span></div>
             {pendingRecurrences.length ? <><div className="recurrence-review-tools"><label><input type="checkbox" checked={pendingRecurrences.every(item => selectedRecurrences.includes(item.id))} onChange={event => setRecurrenceSelection(event.target.checked ? pendingRecurrences.map(item => item.id) : [])} /> Selecionar todas</label><span>{pendingRecurrences.length} para revisar</span></div><div className="recurrence-list">{pendingRecurrences.map(item => { const category = data.categories.find(value => value.id === item.category); return <div className="recurrence-review-item" key={item.id}><input type="checkbox" aria-label={`Confirmar ${item.description}`} checked={selectedRecurrences.includes(item.id)} onChange={event => { const current = new Set(selectedRecurrences); if (event.target.checked) current.add(item.id); else current.delete(item.id); setRecurrenceSelection([...current]) }} /><span className="category-icon" style={{ color: category?.color, background: `${category?.color}18` }}>↻</span><span className="recurrence-info"><b>{item.description}</b><small>{category?.name || 'Sem categoria'} · Todo dia {item.day} · {item.method}</small></span><b className="recurrence-amount">{money(item.amount)}</b><button type="button" className="recurrence-skip" onClick={() => skipRecurrence(item.id)}>Pular</button></div> })}</div><div className="recurrence-review-footer"><span>Os lançamentos confirmados entram na lista do mês.</span><button className="primary" disabled={!selectedRecurrences.length} onClick={confirmRecurrences}>Confirmar {selectedRecurrences.length} {selectedRecurrences.length === 1 ? 'despesa' : 'despesas'}</button></div></> : <div className="empty">Nenhuma cobrança pendente para revisar neste mês.</div>}
           </div>
-          <div className="panel recurrence-manage"><div className="panel-head"><div><h2>Modelos mensais</h2><p>Gerencie os valores e a frequência das despesas.</p></div><span className="recurrence-count">{recurrences.filter(item => item.active).length} ativas</span></div>{recurrences.length ? <div className="recurrence-list">{recurrences.map(item => { const category = data.categories.find(value => value.id === item.category); return <div className={`recurrence-template ${item.active ? '' : 'is-paused'}`} key={item.id}><span className="category-icon" style={{ color: category?.color, background: `${category?.color}18` }}>↻</span><span className="recurrence-info"><b>{item.description}</b><small>{category?.name || 'Sem categoria'} · Dia {item.day} · {item.active ? 'Ativa' : 'Pausada'}</small></span><b className="recurrence-amount">{money(item.amount)}</b><details className="row-actions"><summary aria-label={`Ações para ${item.description}`} title="Ações">···</summary><div className={`row-action-menu ${theme === 'dark' ? 'is-dark' : 'is-light'}`}><button onClick={event => closeActionMenu(event, () => openRecurrence(item))}>Editar</button><button onClick={event => closeActionMenu(event, () => save({ ...data, recurrences: recurrences.map(value => value.id === item.id ? { ...value, active: !value.active } : value) }))}>{item.active ? 'Pausar' : 'Reativar'}</button><button className="danger" onClick={event => closeActionMenu(event, () => { if (window.confirm(`Excluir a recorrência “${item.description}”? Os lançamentos já criados serão mantidos.`)) save({ ...data, recurrences: recurrences.filter(value => value.id !== item.id) }) })}>Excluir</button></div></details></div> })}</div> : <div className="empty">Cadastre seu primeiro modelo mensal para revisar cobranças recorrentes aqui.</div>}</div>
+          <div className="panel recurrence-manage"><div className="panel-head"><div><h2>Modelos mensais</h2><p>Gerencie os valores e a frequência das despesas.</p></div><span className="recurrence-count">{recurrences.filter(item => item.active).length} ativas</span></div>{recurrences.length ? <div className="recurrence-list">{recurrences.map(item => { const category = data.categories.find(value => value.id === item.category); return <div className={`recurrence-template ${item.active ? '' : 'is-paused'}`} key={item.id}><span className="category-icon" style={{ color: category?.color, background: `${category?.color}18` }}>↻</span><span className="recurrence-info"><b>{item.description}</b><small>{category?.name || 'Sem categoria'} · Dia {item.day} · {item.active ? 'Ativa' : 'Pausada'}</small></span><b className="recurrence-amount">{money(item.amount)}</b><details className="row-actions"><summary aria-label={`Ações para ${item.description}`} title="Ações">···</summary><div className={`row-action-menu ${theme === 'dark' ? 'is-dark' : 'is-light'}`}><button onClick={event => closeActionMenu(event, () => openRecurrence(item))}>Editar</button><button onClick={event => closeActionMenu(event, () => save({ ...data, recurrences: recurrences.map(value => value.id === item.id ? { ...value, active: !value.active } : value) }))}>{item.active ? 'Pausar' : 'Reativar'}</button><button className="danger" onClick={event => closeActionMenu(event, () => setConfirmDialog({ eyebrow: 'CONFIRMAR EXCLUSÃO', title: `Excluir “${item.description}”?`, description: 'O modelo mensal será removido. Os lançamentos que já foram criados nos meses anteriores serão mantidos.', confirmLabel: 'Excluir recorrência', onConfirm: () => { if (save({ ...data, recurrences: recurrences.filter(value => value.id !== item.id) })) showToast('Recorrência excluída.'); closeConfirmDialog() } }))}>Excluir</button></div></details></div> })}</div> : <div className="empty">Cadastre seu primeiro modelo mensal para revisar cobranças recorrentes aqui.</div>}</div>
         </section> : view === 'Visão geral' ? <>
           <section className="stats health-stats">
             <article className="stat-card balance-card"><div className="stat-top"><span>Gastos pessoais do mês</span><span className="stat-symbol">↘</span></div><strong>{money(total)}</strong><div className="stat-foot">Sua parte em {monthName(month)}</div><div className="sparkline"><svg viewBox="0 0 240 50" preserveAspectRatio="none"><path d="M0 40 C18 37 22 29 37 34 S56 31 67 30 S82 39 97 29 S118 24 129 29 S151 12 162 20 S178 29 187 19 S210 23 219 7 S233 17 240 6" fill="none" stroke="#7be1c4" strokeWidth="2" /></svg></div></article>
@@ -607,22 +763,35 @@ function App() {
       </div>
     </main>
 
-    {modal && <div className={`modal-backdrop ${closingModal === 'expense' ? 'is-closing' : ''}`} onMouseDown={e => { if (e.target === e.currentTarget) closeExpenseModal() }}><form className="modal expense-modal" role="dialog" aria-modal="true" aria-labelledby="expense-modal-title" onSubmit={addExpense}>
+    {modal && <div className={`modal-backdrop ${closingModal === 'expense' ? 'is-closing' : ''}`} onMouseDown={e => { if (e.target === e.currentTarget) closeExpenseModal() }}><form noValidate className={`modal expense-modal ${formShake === 'expense' ? 'is-shaking' : ''}`} role="dialog" aria-modal="true" aria-labelledby="expense-modal-title" onSubmit={addExpense} onAnimationEnd={event => { if (event.animationName === 'nexus-modal-shake') setFormShake(null) }}>
       <div className="modal-header"><div><span className="eyebrow">{editingExpenseId ? 'EDITAR REGISTRO' : 'NOVO REGISTRO'}</span><h2 id="expense-modal-title">{editingExpenseId ? 'Editar lançamento' : 'Adicionar lançamento'}</h2></div><button type="button" aria-label="Fechar lançamento" onClick={closeExpenseModal}>×</button></div>
-      <label>Descrição<input required autoFocus={!isTouchDevice()} enterKeyHint="done" onKeyDown={dismissKeyboardOnEnter} placeholder="Ex.: mercado, conta de luz..." value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} /></label>
-      <div className="form-row"><label>Valor total<input required type="text" inputMode="decimal" enterKeyHint="done" onKeyDown={dismissKeyboardOnEnter} placeholder="0,00" value={form.amount} onChange={e => { setShareError(''); setForm({ ...form, amount: e.target.value }) }} /></label><label>Data da compra<input required type="date" value={form.date} onFocus={blurActiveInputOnTouch} onChange={e => { setShareError(''); setForm({ ...form, date: e.target.value }) }} /></label></div>
-      <div className="form-row"><label>Categoria<select value={form.category || data.categories[0]?.id || ''} onFocus={blurActiveInputOnTouch} onChange={e => setForm({ ...form, category: e.target.value })}>{data.categories.map(c => <option value={c.id} key={c.id}>{c.name}</option>)}</select></label><label>Forma de pagamento<select value={form.method} onFocus={blurActiveInputOnTouch} onChange={e => { const nextMethod = e.target.value as Method; setForm({ ...form, method: nextMethod, cardId: nextMethod.startsWith('Crédito') ? (form.cardId || data.cards[0]?.id || '') : form.cardId }) }}><option>PIX</option><option>Débito</option><option>Crédito à vista</option><option>Crédito parcelado</option></select></label></div>
+      <label className={expenseErrors.description ? 'is-invalid' : ''}>Descrição<input autoFocus={!isTouchDevice()} enterKeyHint="done" onKeyDown={dismissKeyboardOnEnter} aria-invalid={Boolean(expenseErrors.description)} placeholder="Ex.: mercado, conta de luz..." value={form.description} onChange={e => { clearFieldError(setExpenseErrors, 'description'); setForm({ ...form, description: e.target.value }) }} />{expenseErrors.description && <small className="field-error-msg" role="alert">{expenseErrors.description}</small>}</label>
+      <div className="form-row"><label className={expenseErrors.amount ? 'is-invalid' : ''}>Valor total<div className="money-input-wrap"><span className="money-prefix" aria-hidden="true">R$</span><input type="text" inputMode="decimal" enterKeyHint="done" onKeyDown={dismissKeyboardOnEnter} aria-invalid={Boolean(expenseErrors.amount)} placeholder="0,00" value={form.amount} onChange={e => { clearFieldError(setExpenseErrors, 'amount'); setShareError(''); setForm({ ...form, amount: formatMoneyInput(e.target.value) }) }} /></div>{expenseErrors.amount && <small className="field-error-msg" role="alert">{expenseErrors.amount}</small>}</label><label className={expenseErrors.date ? 'is-invalid' : ''}>Data da compra<input type="date" aria-invalid={Boolean(expenseErrors.date)} value={form.date} onFocus={blurActiveInputOnTouch} onChange={e => { clearFieldError(setExpenseErrors, 'date'); setShareError(''); setForm({ ...form, date: e.target.value }) }} />{expenseErrors.date && <small className="field-error-msg" role="alert">{expenseErrors.date}</small>}</label></div>
+      <div className="form-row"><label>Categoria<select value={form.category || data.categories[0]?.id || ''} onFocus={blurActiveInputOnTouch} onChange={e => setForm({ ...form, category: e.target.value })}>{data.categories.map(c => <option value={c.id} key={c.id}>{c.name}</option>)}</select></label><label>Forma de pagamento<select value={form.method} onFocus={blurActiveInputOnTouch} onChange={e => { const nextMethod = e.target.value as Method; clearFieldError(setExpenseErrors, 'installments'); setForm({ ...form, method: nextMethod, cardId: nextMethod.startsWith('Crédito') ? (form.cardId || data.cards[0]?.id || '') : form.cardId }) }}><option>PIX</option><option>Débito</option><option>Crédito à vista</option><option>Crédito parcelado</option></select></label></div>
       {form.method.startsWith('Crédito') && <><label>Cartão<select value={form.cardId || data.cards[0]?.id || ''} onFocus={blurActiveInputOnTouch} onChange={e => setForm({ ...form, cardId: e.target.value })}>{data.cards.map(c => <option key={c.id} value={c.id}>{c.name} · fecha dia {c.closingDay} · vence dia {c.dueDay}</option>)}</select></label>{selectedFormCard && creditDueMonth && <div className="billing-preview"><span>◷</span><div>{form.method === 'Crédito parcelado' ? 'A primeira parcela vence em' : 'Esta compra vence em'} <b>{monthName(creditDueMonth)}</b>, no dia {selectedFormCard.dueDay}.{Number(normalizedFormDate.slice(-2)) >= selectedFormCard.closingDay ? ' Como a compra cai no fechamento ou depois, ela entra no próximo ciclo.' : ' A compra entra no ciclo que está para fechar.'}</div></div>}</>}
-      {form.method === 'Crédito parcelado' && <label>Número de parcelas<input type="number" min="2" max="60" enterKeyHint="done" onKeyDown={dismissKeyboardOnEnter} value={form.installments} onChange={e => setForm({ ...form, installments: e.target.value })} /><small className="form-help">O valor será dividido automaticamente entre os meses.</small></label>}
-      <fieldset className="participants-field"><legend>Alguém precisa te pagar?</legend>{(data.participants || []).length ? <><p>Informe quanto essa pessoa deve. Em compras parceladas, você pode atribuir o valor a todas as parcelas ou apenas a uma.</p>{(data.participants || []).map(participant => { const share = form.shares.find(item => item.participantId === participant.id); return <div className="participant-share-row" key={participant.id}><label className="participant-check"><input type="checkbox" checked={Boolean(share)} onChange={e => { blurActiveInputOnTouch(); setShareError(''); setForm({ ...form, shares: e.target.checked ? [...form.shares, { participantId: participant.id, amount: '', installment: 'all' }] : form.shares.filter(item => item.participantId !== participant.id) }) }} /><span>{participant.name}</span></label>{share && <div className="participant-share-controls"><label className="participant-amount">Quanto? (R$)<input aria-label={`Valor que ${participant.name} deve pagar`} type="text" inputMode="decimal" enterKeyHint="done" onKeyDown={dismissKeyboardOnEnter} placeholder="0,00" value={share.amount} onChange={e => { setShareError(''); setForm({ ...form, shares: form.shares.map(item => item.participantId === participant.id ? { ...item, amount: e.target.value } : item) }) }} /></label>{form.method === 'Crédito parcelado' && <label className="participant-scope">Cobrança<select aria-label={`Parcelas de ${participant.name}`} value={share.installment} onFocus={blurActiveInputOnTouch} onChange={e => setForm({ ...form, shares: form.shares.map(item => item.participantId === participant.id ? { ...item, installment: e.target.value } : item) })}><option value="all">Todas</option>{Array.from({ length: Math.max(2, Number(form.installments) || 2) }, (_, i) => <option key={i + 1} value={i + 1}>Só {i + 1}ª parcela</option>)}</select></label>}</div>}</div> })}<button type="button" className="inline-participant-btn" onClick={addParticipantFromExpense}>＋ Adicionar outra pessoa</button></> : <div className="participants-empty">Ainda não há pessoas cadastradas. <button type="button" className="inline-participant-btn" onClick={addParticipantFromExpense}>＋ Adicionar pessoa</button></div>}{shareError && <div className="share-error" role="alert">{shareError}</div>}</fieldset>
+      {form.method === 'Crédito parcelado' && <label className={expenseErrors.installments ? 'is-invalid' : ''}>Número de parcelas<input type="text" inputMode="numeric" enterKeyHint="done" onKeyDown={dismissKeyboardOnEnter} aria-invalid={Boolean(expenseErrors.installments)} placeholder="2 a 60" value={form.installments} onChange={e => { clearFieldError(setExpenseErrors, 'installments'); setForm({ ...form, installments: e.target.value.replace(/\D/g, '').slice(0, 2) }) }} />{expenseErrors.installments ? <small className="field-error-msg" role="alert">{expenseErrors.installments}</small> : <small className="form-help">O valor será dividido automaticamente entre os meses.</small>}</label>}
+      <fieldset className="participants-field"><legend>Alguém precisa te pagar?</legend>{(data.participants || []).length ? <><p>Informe quanto essa pessoa deve. Em compras parceladas, você pode atribuir o valor a todas as parcelas ou apenas a uma.</p>{(data.participants || []).map(participant => { const share = form.shares.find(item => item.participantId === participant.id); const shareErrorKey = `share-${participant.id}`; const participantError = expenseErrors[shareErrorKey]; return <div className="participant-share-row" key={participant.id}><label className="participant-check"><input type="checkbox" checked={Boolean(share)} onChange={e => { blurActiveInputOnTouch(); setShareError(''); clearFieldError(setExpenseErrors, shareErrorKey); setForm({ ...form, shares: e.target.checked ? [...form.shares, { participantId: participant.id, amount: '', installment: 'all' }] : form.shares.filter(item => item.participantId !== participant.id) }) }} /><span>{participant.name}</span></label>{share && <div className="participant-share-controls"><label className={`participant-amount ${participantError ? 'is-invalid' : ''}`}>Quanto?<div className="money-input-wrap compact"><span className="money-prefix" aria-hidden="true">R$</span><input aria-label={`Valor que ${participant.name} deve pagar`} aria-invalid={Boolean(participantError)} type="text" inputMode="decimal" enterKeyHint="done" onKeyDown={dismissKeyboardOnEnter} placeholder="0,00" value={share.amount} onChange={e => { clearFieldError(setExpenseErrors, shareErrorKey); setShareError(''); setForm({ ...form, shares: form.shares.map(item => item.participantId === participant.id ? { ...item, amount: formatMoneyInput(e.target.value) } : item) }) }} /></div>{participantError && <small className="field-error-msg" role="alert">{participantError}</small>}</label>{form.method === 'Crédito parcelado' && <label className="participant-scope">Cobrança<select aria-label={`Parcelas de ${participant.name}`} value={share.installment} onFocus={blurActiveInputOnTouch} onChange={e => setForm({ ...form, shares: form.shares.map(item => item.participantId === participant.id ? { ...item, installment: e.target.value } : item) })}><option value="all">Todas</option>{Array.from({ length: Math.max(2, Number(form.installments) || 2) }, (_, i) => <option key={i + 1} value={i + 1}>Só {i + 1}ª parcela</option>)}</select></label>}</div>}</div> })}<button type="button" className="inline-participant-btn" onClick={addParticipantFromExpense}>＋ Adicionar outra pessoa</button></> : <div className="participants-empty">Ainda não há pessoas cadastradas. <button type="button" className="inline-participant-btn" onClick={addParticipantFromExpense}>＋ Adicionar pessoa</button></div>}{shareError && <div className="share-error" role="alert">{shareError}</div>}</fieldset>
       <div className="modal-actions"><button type="button" className="cancel-btn" onClick={closeExpenseModal}>Cancelar</button><button className="primary" type="submit">{editingExpenseId ? 'Salvar alterações' : 'Salvar lançamento'}</button></div>
     </form></div>}
 
-    {recurrenceEditor && <div className={`modal-backdrop ${closingModal === 'recurrence' ? 'is-closing' : ''}`} onMouseDown={event => { if (event.target === event.currentTarget) closeRecurrenceModal() }}><form className="modal recurrence-modal" role="dialog" aria-modal="true" aria-labelledby="recurrence-modal-title" onSubmit={saveRecurrence}><div className="modal-header"><div><span className="eyebrow">DESPESA MENSAL</span><h2 id="recurrence-modal-title">{recurrenceEditor.id ? 'Editar recorrência' : 'Nova recorrência'}</h2></div><button type="button" aria-label="Fechar recorrência" onClick={closeRecurrenceModal}>×</button></div><label>Descrição<input required autoFocus={!isTouchDevice()} enterKeyHint="done" onKeyDown={dismissKeyboardOnEnter} maxLength={70} placeholder="Ex.: Internet, academia..." value={recurrenceEditor.description} onChange={event => setRecurrenceEditor({ ...recurrenceEditor, description: event.target.value })} /></label><div className="form-row"><label>Valor mensal<input required type="text" inputMode="decimal" enterKeyHint="done" onKeyDown={dismissKeyboardOnEnter} placeholder="0,00" value={recurrenceEditor.amount} onChange={event => setRecurrenceEditor({ ...recurrenceEditor, amount: event.target.value })} /></label><label>Dia da cobrança<input required type="number" min="1" max="31" enterKeyHint="done" onKeyDown={dismissKeyboardOnEnter} value={recurrenceEditor.day} onChange={event => setRecurrenceEditor({ ...recurrenceEditor, day: event.target.value })} /></label></div><div className="form-row"><label>Categoria<select required value={recurrenceEditor.category} onFocus={blurActiveInputOnTouch} onChange={event => setRecurrenceEditor({ ...recurrenceEditor, category: event.target.value })}>{data.categories.map(category => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label><label>Pagamento<select value={recurrenceEditor.method} onFocus={blurActiveInputOnTouch} onChange={event => setRecurrenceEditor({ ...recurrenceEditor, method: event.target.value as Method })}><option>PIX</option><option>Débito</option>{data.cards.length > 0 && <option>Crédito à vista</option>}</select></label></div>{recurrenceEditor.method.startsWith('Crédito') && <label>Cartão<select required value={recurrenceEditor.cardId} onFocus={blurActiveInputOnTouch} onChange={event => setRecurrenceEditor({ ...recurrenceEditor, cardId: event.target.value })}>{data.cards.map(card => <option key={card.id} value={card.id}>{card.name}</option>)}</select></label>}<p className="form-help">A recorrência só vira lançamento quando você confirma na revisão mensal. Você pode pular uma cobrança ou pausar o modelo.</p><div className="modal-actions"><button type="button" className="cancel-btn" onClick={closeRecurrenceModal}>Cancelar</button><button className="primary" type="submit">{recurrenceEditor.id ? 'Salvar alterações' : 'Criar modelo'}</button></div></form></div>}
-    {settingsModal && <div className={`modal-backdrop ${closingModal === 'settings' ? 'is-closing' : ''}`} onMouseDown={e => { if (e.target === e.currentTarget) closeSettingsModal() }}><form className="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title" onSubmit={saveSetting}><div className="modal-header"><div><span className="eyebrow">AJUSTES</span><h2 id="settings-modal-title">{settingsModal.id ? 'Editar' : 'Novo'} {settingsModal.kind === 'category' ? 'categoria' : settingsModal.kind === 'card' ? 'cartão' : 'participante'}</h2></div><button type="button" aria-label="Fechar ajustes" onClick={closeSettingsModal}>×</button></div><label>Nome<input required autoFocus={!isTouchDevice()} enterKeyHint="done" onKeyDown={dismissKeyboardOnEnter} maxLength={40} placeholder={settingsModal.kind === 'category' ? 'Ex.: Educação' : settingsModal.kind === 'card' ? 'Ex.: Cartão principal' : 'Ex.: Maria'} value={settingsModal.name} onChange={e => setSettingsModal({ ...settingsModal, name: e.target.value })} /></label>{settingsModal.kind === 'category' ? <label>Cor da categoria<div className="color-picker-row"><input aria-label="Cor da categoria" type="color" value={settingsModal.color} onChange={e => { const color = e.currentTarget.value; setSettingsModal(current => current ? { ...current, color } : current) }} onKeyDown={e => { if (e.key === 'Escape') e.currentTarget.blur() }} /><span>Escolha uma cor para identificar esta categoria.</span><button type="button" className="color-picker-confirm" onClick={e => e.currentTarget.parentElement?.querySelector<HTMLInputElement>('input[type="color"]')?.blur()}>OK</button></div></label> : settingsModal.kind === 'card' ? <div className="form-row"><label>Dia de fechamento<input required type="number" min="1" max="31" enterKeyHint="done" onKeyDown={dismissKeyboardOnEnter} value={settingsModal.closingDay} onChange={e => setSettingsModal({ ...settingsModal, closingDay: e.target.value })} /><small className="form-help">Compras a partir deste dia vão para o próximo ciclo.</small></label><label>Dia de vencimento<input required type="number" min="1" max="31" enterKeyHint="done" onKeyDown={dismissKeyboardOnEnter} value={settingsModal.dueDay} onChange={e => setSettingsModal({ ...settingsModal, dueDay: e.target.value })} /></label></div> : <p className="form-help participant-modal-help">Os valores atribuídos a esta pessoa ficarão associados aos lançamentos correspondentes e serão salvos apenas neste dispositivo.</p>}<div className="modal-actions"><button type="button" className="cancel-btn" onClick={closeSettingsModal}>Cancelar</button><button className="primary" type="submit">{settingsModal.id ? 'Salvar alterações' : 'Adicionar'}</button></div></form></div>}
+    {recurrenceEditor && <div className={`modal-backdrop ${closingModal === 'recurrence' ? 'is-closing' : ''}`} onMouseDown={event => { if (event.target === event.currentTarget) closeRecurrenceModal() }}><form noValidate className={`modal recurrence-modal ${formShake === 'recurrence' ? 'is-shaking' : ''}`} role="dialog" aria-modal="true" aria-labelledby="recurrence-modal-title" onSubmit={saveRecurrence} onAnimationEnd={event => { if (event.animationName === 'nexus-modal-shake') setFormShake(null) }}><div className="modal-header"><div><span className="eyebrow">DESPESA MENSAL</span><h2 id="recurrence-modal-title">{recurrenceEditor.id ? 'Editar recorrência' : 'Nova recorrência'}</h2></div><button type="button" aria-label="Fechar recorrência" onClick={closeRecurrenceModal}>×</button></div><label className={recurrenceErrors.description ? 'is-invalid' : ''}>Descrição<input autoFocus={!isTouchDevice()} enterKeyHint="done" onKeyDown={dismissKeyboardOnEnter} maxLength={70} aria-invalid={Boolean(recurrenceErrors.description)} placeholder="Ex.: Internet, academia..." value={recurrenceEditor.description} onChange={event => { clearFieldError(setRecurrenceErrors, 'description'); setRecurrenceEditor({ ...recurrenceEditor, description: event.target.value }) }} />{recurrenceErrors.description && <small className="field-error-msg" role="alert">{recurrenceErrors.description}</small>}</label><div className="form-row"><label className={recurrenceErrors.amount ? 'is-invalid' : ''}>Valor mensal<div className="money-input-wrap"><span className="money-prefix" aria-hidden="true">R$</span><input type="text" inputMode="decimal" enterKeyHint="done" onKeyDown={dismissKeyboardOnEnter} aria-invalid={Boolean(recurrenceErrors.amount)} placeholder="0,00" value={recurrenceEditor.amount} onChange={event => { clearFieldError(setRecurrenceErrors, 'amount'); setRecurrenceEditor({ ...recurrenceEditor, amount: formatMoneyInput(event.target.value) }) }} /></div>{recurrenceErrors.amount && <small className="field-error-msg" role="alert">{recurrenceErrors.amount}</small>}</label><label className={recurrenceErrors.day ? 'is-invalid' : ''}>Dia da cobrança<input type="text" inputMode="numeric" enterKeyHint="done" onKeyDown={dismissKeyboardOnEnter} aria-invalid={Boolean(recurrenceErrors.day)} placeholder="1 a 31" value={recurrenceEditor.day} onChange={event => { clearFieldError(setRecurrenceErrors, 'day'); setRecurrenceEditor({ ...recurrenceEditor, day: event.target.value.replace(/\D/g, '').slice(0, 2) }) }} />{recurrenceErrors.day && <small className="field-error-msg" role="alert">{recurrenceErrors.day}</small>}</label></div><div className="form-row"><label>Categoria<select value={recurrenceEditor.category} onFocus={blurActiveInputOnTouch} onChange={event => setRecurrenceEditor({ ...recurrenceEditor, category: event.target.value })}>{data.categories.map(category => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label><label>Pagamento<select value={recurrenceEditor.method} onFocus={blurActiveInputOnTouch} onChange={event => setRecurrenceEditor({ ...recurrenceEditor, method: event.target.value as Method })}><option>PIX</option><option>Débito</option>{data.cards.length > 0 && <option>Crédito à vista</option>}</select></label></div>{recurrenceEditor.method.startsWith('Crédito') && <label>Cartão<select value={recurrenceEditor.cardId} onFocus={blurActiveInputOnTouch} onChange={event => setRecurrenceEditor({ ...recurrenceEditor, cardId: event.target.value })}>{data.cards.map(card => <option key={card.id} value={card.id}>{card.name}</option>)}</select></label>}<p className="form-help">A recorrência só vira lançamento quando você confirma na revisão mensal. Você pode pular uma cobrança ou pausar o modelo.</p><div className="modal-actions"><button type="button" className="cancel-btn" onClick={closeRecurrenceModal}>Cancelar</button><button className="primary" type="submit">{recurrenceEditor.id ? 'Salvar alterações' : 'Criar modelo'}</button></div></form></div>}
+    {confirmDialog && <div className={`modal-backdrop ${closingModal === 'confirm' ? 'is-closing' : ''}`} onMouseDown={event => { if (event.target === event.currentTarget) closeConfirmDialog() }}>
+      <section className="modal confirm-dialog-modal" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title">
+        <div className="modal-header">
+          <div><span className="eyebrow">{confirmDialog.eyebrow}</span><h2 id="confirm-dialog-title">{confirmDialog.title}</h2></div>
+          <button type="button" aria-label="Fechar confirmação" onClick={closeConfirmDialog}>×</button>
+        </div>
+        <p className="confirm-dialog-description">{confirmDialog.description}</p>
+        <div className="modal-actions">
+          <button type="button" className="cancel-btn" onClick={closeConfirmDialog}>Cancelar</button>
+          <button type="button" className="danger-btn" onClick={confirmDialog.onConfirm}>{confirmDialog.confirmLabel}</button>
+        </div>
+      </section>
+    </div>}
+    {settingsModal && <div className={`modal-backdrop ${closingModal === 'settings' ? 'is-closing' : ''}`} onMouseDown={e => { if (e.target === e.currentTarget) closeSettingsModal() }}><form noValidate className={`modal settings-modal ${formShake === 'settings' ? 'is-shaking' : ''}`} role="dialog" aria-modal="true" aria-labelledby="settings-modal-title" onSubmit={saveSetting} onAnimationEnd={event => { if (event.animationName === 'nexus-modal-shake') setFormShake(null) }}><div className="modal-header"><div><span className="eyebrow">AJUSTES</span><h2 id="settings-modal-title">{settingsModal.id ? 'Editar' : 'Novo'} {settingsModal.kind === 'category' ? 'categoria' : settingsModal.kind === 'card' ? 'cartão' : 'participante'}</h2></div><button type="button" aria-label="Fechar ajustes" onClick={closeSettingsModal}>×</button></div><label className={settingsErrors.name ? 'is-invalid' : ''}>Nome<input autoFocus={!isTouchDevice()} enterKeyHint="done" onKeyDown={dismissKeyboardOnEnter} maxLength={40} aria-invalid={Boolean(settingsErrors.name)} placeholder={settingsModal.kind === 'category' ? 'Ex.: Educação' : settingsModal.kind === 'card' ? 'Ex.: Cartão principal' : 'Ex.: Maria'} value={settingsModal.name} onChange={e => { clearFieldError(setSettingsErrors, 'name'); setSettingsModal({ ...settingsModal, name: e.target.value }) }} />{settingsErrors.name && <small className="field-error-msg" role="alert">{settingsErrors.name}</small>}</label>{settingsModal.kind === 'category' ? <div className={`category-color-field ${settingsErrors.color ? 'is-invalid' : ''}`}><span className="category-color-label">Cor da categoria</span><div className="color-swatch-grid" role="radiogroup" aria-label="Paleta de cores da categoria">{CATEGORY_COLOR_PRESETS.map(preset => { const isSelected = settingsModal.color.toLowerCase() === preset.color.toLowerCase(); return <button key={preset.color} type="button" role="radio" aria-checked={isSelected} aria-label={preset.label} title={preset.label} className={`color-swatch ${isSelected ? 'is-selected' : ''}`} style={{ backgroundColor: preset.color }} onClick={() => { clearFieldError(setSettingsErrors, 'color'); setSettingsModal(current => current ? { ...current, color: preset.color } : current) }}>{isSelected && <span aria-hidden="true">✓</span>}</button> })}</div><label className={`custom-hex-row ${settingsErrors.color ? 'is-invalid' : ''}`}><span className="custom-hex-preview" style={{ backgroundColor: /^#[0-9a-fA-F]{6}$/.test(settingsModal.color) ? settingsModal.color : '#6e7f72' }} aria-hidden="true" /><span className="custom-hex-caption">Código da cor (HEX)</span><input type="text" maxLength={7} enterKeyHint="done" onKeyDown={dismissKeyboardOnEnter} aria-label="Código hexadecimal da cor" aria-invalid={Boolean(settingsErrors.color)} placeholder="#6E7F72" value={settingsModal.color.toUpperCase()} onChange={e => { clearFieldError(setSettingsErrors, 'color'); const raw = e.target.value.replace(/[^#0-9a-fA-F]/g, ''); const next = raw.startsWith('#') ? `#${raw.slice(1).replace(/#/g, '').slice(0, 6)}` : `#${raw.replace(/#/g, '').slice(0, 6)}`; setSettingsModal(current => current ? { ...current, color: next } : current) }} /></label>{settingsErrors.color && <small className="field-error-msg" role="alert">{settingsErrors.color}</small>}</div> : settingsModal.kind === 'card' ? <div className="form-row"><label className={settingsErrors.closingDay ? 'is-invalid' : ''}>Dia de fechamento<input type="text" inputMode="numeric" enterKeyHint="done" onKeyDown={dismissKeyboardOnEnter} aria-invalid={Boolean(settingsErrors.closingDay)} placeholder="1 a 31" value={settingsModal.closingDay} onChange={e => { clearFieldError(setSettingsErrors, 'closingDay'); setSettingsModal({ ...settingsModal, closingDay: e.target.value.replace(/\D/g, '').slice(0, 2) }) }} />{settingsErrors.closingDay ? <small className="field-error-msg" role="alert">{settingsErrors.closingDay}</small> : <small className="form-help">Compras a partir deste dia vão para o próximo ciclo.</small>}</label><label className={settingsErrors.dueDay ? 'is-invalid' : ''}>Dia de vencimento<input type="text" inputMode="numeric" enterKeyHint="done" onKeyDown={dismissKeyboardOnEnter} aria-invalid={Boolean(settingsErrors.dueDay)} placeholder="1 a 31" value={settingsModal.dueDay} onChange={e => { clearFieldError(setSettingsErrors, 'dueDay'); setSettingsModal({ ...settingsModal, dueDay: e.target.value.replace(/\D/g, '').slice(0, 2) }) }} />{settingsErrors.dueDay && <small className="field-error-msg" role="alert">{settingsErrors.dueDay}</small>}</label></div> : <p className="form-help participant-modal-help">Os valores atribuídos a esta pessoa ficarão associados aos lançamentos correspondentes e serão salvos apenas neste dispositivo.</p>}<div className="modal-actions"><button type="button" className="cancel-btn" onClick={closeSettingsModal}>Cancelar</button><button className="primary" type="submit">{settingsModal.id ? 'Salvar alterações' : 'Adicionar'}</button></div></form></div>}
     {pendingBackupImport && <div className={`modal-backdrop ${closingModal === 'backup' ? 'is-closing' : ''}`} onMouseDown={event => { if (event.target === event.currentTarget) closeBackupConfirmModal() }}><section className="modal backup-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="backup-confirm-title"><div className="modal-header"><div><span className="eyebrow">SEUS DADOS</span><h2 id="backup-confirm-title">Importar backup?</h2></div><button type="button" aria-label="Fechar" onClick={closeBackupConfirmModal}>×</button></div><p>Esta ação vai substituir os dados salvos neste navegador.</p>{pendingBackupImport.preferences && <p>O arquivo também contém suas preferências, como tema, tela inicial, limite mensal e perfil.</p>}<div className="modal-actions"><button type="button" className="cancel-btn" onClick={closeBackupConfirmModal}>Cancelar</button><button type="button" className="primary" onClick={confirmBackupImport}>Importar e substituir</button></div></section></div>}
     {resetDataModalOpen && <div className={`modal-backdrop ${closingModal === 'reset' ? 'is-closing' : ''}`} onMouseDown={event => { if (event.target === event.currentTarget) closeResetDataModal() }}>
-      <form className="modal reset-data-modal" role="dialog" aria-modal="true" aria-labelledby="reset-data-title" onSubmit={confirmResetAllData}>
+      <form noValidate className={`modal reset-data-modal ${formShake === 'reset' ? 'is-shaking' : ''}`} role="dialog" aria-modal="true" aria-labelledby="reset-data-title" onSubmit={confirmResetAllData} onAnimationEnd={event => { if (event.animationName === 'nexus-modal-shake') setFormShake(null) }}>
         <div className="modal-header">
           <div><span className="eyebrow">ZONA DE SEGURANÇA</span><h2 id="reset-data-title">Excluir todos os dados?</h2></div>
           <button type="button" aria-label="Fechar confirmação de exclusão" onClick={closeResetDataModal}>×</button>
@@ -635,8 +804,10 @@ function App() {
         <label className={resetConfirmError ? 'easter-egg-field is-invalid' : 'easter-egg-field'}>
           Para confirmar, digite <b>EXCLUIR</b> abaixo
           <input
-            autoFocus
+            autoFocus={!isTouchDevice()}
             type="text"
+            enterKeyHint="done"
+            onKeyDown={dismissKeyboardOnEnter}
             placeholder="Digite EXCLUIR"
             aria-invalid={resetConfirmError}
             value={resetConfirmText}
@@ -645,16 +816,16 @@ function App() {
               if (resetConfirmError) setResetConfirmError(false)
             }}
           />
-          {resetConfirmError && <small className="reset-confirm-error" role="alert">Digite exatamente a palavra EXCLUIR para liberar a limpeza dos dados.</small>}
+          {resetConfirmError && <small className="field-error-msg" role="alert">Digite exatamente a palavra EXCLUIR para liberar a limpeza dos dados.</small>}
         </label>
         <div className="modal-actions">
           <button type="button" className="cancel-btn" onClick={closeResetDataModal}>Cancelar</button>
-          <button type="submit" className="danger-btn" disabled={resetConfirmText.trim().toLocaleUpperCase('pt-BR') !== 'EXCLUIR'}>Excluir tudo e recomeçar</button>
+          <button type="submit" className="danger-btn">Excluir tudo e recomeçar</button>
         </div>
       </form>
     </div>}
     {onboardingOpen && <div className={`modal-backdrop onboarding-backdrop ${closingModal === 'onboarding' ? 'is-closing' : ''}`}>
-      <form className="modal onboarding-modal" role="dialog" aria-modal="true" aria-labelledby="onboarding-title" onSubmit={completeOnboarding}>
+      <form noValidate className="modal onboarding-modal" role="dialog" aria-modal="true" aria-labelledby="onboarding-title" onSubmit={completeOnboarding}>
         <div className="onboarding-brand">
           <span className="brand-mark"><svg viewBox="0 0 48 48" shapeRendering="crispEdges" aria-hidden="true"><rect x="1" y="1" width="46" height="46" rx="13" fill="#20231f"/><path d="M18 6h12v3h6v6h3v6h3v12h-3v6h-6v3H18v-3h-6v-6H9v-6H6V18h3v-6h6V9h3z" fill="#986027"/><path d="M18 9h12v3h6v6h3v12h-3v6h-6v3H18v-3h-6v-6H9V18h3v-6h6z" fill="#e8b957"/><path d="M18 12h12v3h6v3h-3v3h-3v-3H18v-3h-3v-3h3z" fill="#f6d77e"/><rect x="22" y="14" width="4" height="20" fill="#80501f"/><rect x="18" y="17" width="12" height="3" fill="#80501f"/><rect x="15" y="20" width="3" height="3" fill="#80501f"/><rect x="18" y="23" width="12" height="3" fill="#80501f"/><rect x="27" y="26" width="3" height="3" fill="#80501f"/><rect x="18" y="29" width="12" height="3" fill="#80501f"/><rect x="12" y="18" width="3" height="6" fill="#f6d77e"/></svg></span>
           <div><span className="eyebrow">BOAS-VINDAS AO PÕE NA CONTA</span><h2 id="onboarding-title">Configure seu perfil</h2><p>Personalize como seu espaço aparece neste navegador. Tudo pode ser alterado depois em Ajustes.</p></div>
@@ -709,7 +880,7 @@ function App() {
         <p className="onboarding-privacy-note">🔒 Seus dados ficam salvos apenas neste navegador.</p>
       </form>
     </div>}
-    {easterEggOpen && <div className={`modal-backdrop easter-egg-backdrop ${closingModal === 'easter-egg' ? 'is-closing' : ''}`} onMouseDown={event => { if (event.target === event.currentTarget) closeEasterEgg() }}>{easterEggMessage ? <section className="modal easter-egg-modal is-revealed" role="dialog" aria-modal="true" aria-labelledby="easter-egg-title"><div className="modal-header"><div><span className="eyebrow">SEGREDO DESBLOQUEADO</span><h2 id="easter-egg-title">Mensagem secreta</h2></div><button type="button" aria-label="Fechar" onClick={closeEasterEgg}>×</button></div><div className="easter-egg-reveal" role="status"><p>{easterEggMessage}</p></div><div className="modal-actions"><button type="button" className="cancel-btn" onClick={() => { setEasterEggMessage(''); setEasterEggPassword(''); setEasterEggError(false); setEasterEggShake(false); window.requestAnimationFrame(() => easterEggInputRef.current?.focus()) }}>Outra senha</button><button type="button" className="primary" onClick={closeEasterEgg}>Fechar</button></div></section> : <form className={`modal easter-egg-modal ${easterEggShake ? 'is-shaking' : ''}`} role="dialog" aria-modal="true" aria-labelledby="easter-egg-title" onSubmit={submitEasterEgg} onAnimationEnd={event => { if (event.animationName === 'nexus-modal-shake') setEasterEggShake(false) }}><div className="modal-header"><div><span className="eyebrow">SEGREDO DESBLOQUEADO</span><h2 id="easter-egg-title">Digite a senha</h2></div><button type="button" aria-label="Fechar" onClick={closeEasterEgg}>×</button></div><label className={easterEggError ? 'easter-egg-field is-invalid' : 'easter-egg-field'}>Senha<input ref={easterEggInputRef} type="password" aria-invalid={easterEggError} value={easterEggPassword} onChange={event => { setEasterEggPassword(event.target.value); if (easterEggError) setEasterEggError(false) }} placeholder="Digite a senha" /></label><div className="modal-actions"><button type="button" className="cancel-btn" onClick={closeEasterEgg}>Fechar</button><button className="primary" type="submit">Confirmar</button></div></form>}</div>}
+    {easterEggOpen && <div className={`modal-backdrop easter-egg-backdrop ${closingModal === 'easter-egg' ? 'is-closing' : ''}`} onMouseDown={event => { if (event.target === event.currentTarget) closeEasterEgg() }}>{easterEggMessage ? <section className="modal easter-egg-modal is-revealed" role="dialog" aria-modal="true" aria-labelledby="easter-egg-title"><div className="modal-header"><div><span className="eyebrow">SEGREDO DESBLOQUEADO</span><h2 id="easter-egg-title">Mensagem secreta</h2></div><button type="button" aria-label="Fechar" onClick={closeEasterEgg}>×</button></div><div className="easter-egg-reveal" role="status"><p>{easterEggMessage}</p></div><div className="modal-actions"><button type="button" className="cancel-btn" onClick={() => { setEasterEggMessage(''); setEasterEggPassword(''); setEasterEggError(false); setEasterEggShake(false); window.requestAnimationFrame(() => easterEggInputRef.current?.focus()) }}>Outra senha</button><button type="button" className="primary" onClick={closeEasterEgg}>Fechar</button></div></section> : <form noValidate className={`modal easter-egg-modal ${easterEggShake ? 'is-shaking' : ''}`} role="dialog" aria-modal="true" aria-labelledby="easter-egg-title" onSubmit={submitEasterEgg} onAnimationEnd={event => { if (event.animationName === 'nexus-modal-shake') setEasterEggShake(false) }}><div className="modal-header"><div><span className="eyebrow">SEGREDO DESBLOQUEADO</span><h2 id="easter-egg-title">Digite a senha</h2></div><button type="button" aria-label="Fechar" onClick={closeEasterEgg}>×</button></div><label className={easterEggError ? 'easter-egg-field is-invalid' : 'easter-egg-field'}>Senha<input ref={easterEggInputRef} type="password" aria-invalid={easterEggError} value={easterEggPassword} onChange={event => { setEasterEggPassword(event.target.value); if (easterEggError) setEasterEggError(false) }} placeholder="Digite a senha" />{easterEggError && <small className="field-error-msg" role="alert">Senha incorreta. Tente novamente.</small>}</label><div className="modal-actions"><button type="button" className="cancel-btn" onClick={closeEasterEgg}>Fechar</button><button className="primary" type="submit">Confirmar</button></div></form>}</div>}
   </div>
 }
 

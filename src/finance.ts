@@ -37,6 +37,18 @@ export const shiftMonth = (key: string, amount: number) => {
   return monthKey(new Date(year, month - 1 + amount, 1))
 }
 
+export const formatMoneyInput = (raw: string | number): string => {
+  if (typeof raw === 'number') {
+    if (!Number.isFinite(raw) || raw <= 0) return ''
+    return raw.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  }
+  const cleanDigits = String(raw ?? '').replace(/\D/g, '').replace(/^0+/, '')
+  if (!cleanDigits) return ''
+  const cents = Number(cleanDigits.slice(0, 13))
+  if (!Number.isFinite(cents) || cents <= 0) return ''
+  return (cents / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
 export const parseMoneyInput = (raw: string | number): number => {
   if (typeof raw === 'number') return raw
   const cleaned = String(raw ?? '').trim().replace(/[R$\s]/g, '')

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { buildOccurrences, cardDueMonth, createBackup, csvCell, normalizeData, normalizeDateInput, parseBackup, parseBackupFile, parseMoneyInput, readStoredData, seed, validateData } from '../src/finance.ts'
+import { buildOccurrences, cardDueMonth, createBackup, csvCell, formatMoneyInput, normalizeData, normalizeDateInput, parseBackup, parseBackupFile, parseMoneyInput, readStoredData, seed, validateData } from '../src/finance.ts'
 
 const card = { id: 'card', name: 'Principal', closingDay: 25, dueDay: 5 }
 
@@ -56,6 +56,12 @@ test('protege valores não confiáveis contra fórmulas e escapa separadores CSV
 })
 
 test('interpreta valores monetários com vírgula ou ponto e datas no formato brasileiro (Mac/Safari)', () => {
+  assert.equal(formatMoneyInput('1'), '0,01')
+  assert.equal(formatMoneyInput('0,015'), '0,15')
+  assert.equal(formatMoneyInput('15050'), '150,50')
+  assert.equal(formatMoneyInput('125050'), '1.250,50')
+  assert.equal(formatMoneyInput('0,0'), '')
+  assert.equal(formatMoneyInput(1850), '1.850,00')
   assert.equal(parseMoneyInput('150,50'), 150.5)
   assert.equal(parseMoneyInput('1.250,50'), 1250.5)
   assert.equal(parseMoneyInput('150.50'), 150.5)
