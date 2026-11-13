@@ -522,21 +522,22 @@ footer{color:#89877f}
 .pwa-install-banner,.backup-reminder-banner{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;margin:14px 0 6px;padding:13px 16px;border:1px solid #dce6de;border-radius:16px;background:#f4f8f5;animation:nexus-card-in .24s cubic-bezier(.2,.75,.25,1) both}
 .backup-reminder-banner{border-color:#e6dec8;background:#fbf8ef}
 .pwa-install-banner-info,.backup-reminder-info{display:flex;align-items:center;gap:12px;flex:1;min-width:220px}
-.pwa-install-icon,.backup-reminder-icon{width:34px;height:34px;flex:0 0 34px;border-radius:10px;display:grid;place-items:center;background:#e3efe7;color:#1d674d;font-size:16px;font-weight:700}
+.pwa-install-icon,.backup-reminder-icon{width:36px;height:36px;flex:0 0 36px;border-radius:11px;display:flex;align-items:center;justify-content:center;background:#e3efe7;color:#1d674d}
+.pwa-install-icon svg,.backup-reminder-icon svg{width:19px;height:19px;display:block;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
 .backup-reminder-icon{background:#f2ead5;color:#826023}
 .pwa-install-banner-info b,.backup-reminder-info b{display:block;font-size:11px;font-weight:700;color:#1d2821}
 .backup-reminder-info b{color:#352c1a}
-.pwa-install-banner-info span,.backup-reminder-info span{display:block;margin-top:2px;font-size:10px;line-height:1.45;color:#5b6960}
-.backup-reminder-info span{color:#6f644b}
+.pwa-install-banner-info>div>span,.backup-reminder-info>div>span{display:block;margin-top:2px;font-size:10px;line-height:1.45;color:#5b6960}
+.backup-reminder-info>div>span{color:#6f644b}
 .pwa-install-banner-actions,.backup-reminder-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .app-shell[data-theme="dark"] .pwa-install-banner{border-color:#3a453b;background:#222821}
 .app-shell[data-theme="dark"] .pwa-install-icon{background:#303b30;color:#9fd4b1}
 .app-shell[data-theme="dark"] .pwa-install-banner-info b{color:#eef2ee}
-.app-shell[data-theme="dark"] .pwa-install-banner-info span{color:#b6c0b7}
+.app-shell[data-theme="dark"] .pwa-install-banner-info>div>span{color:#b6c0b7}
 .app-shell[data-theme="dark"] .backup-reminder-banner{border-color:#52462d;background:#29251c}
 .app-shell[data-theme="dark"] .backup-reminder-icon{background:#3b3424;color:#e5c37c}
 .app-shell[data-theme="dark"] .backup-reminder-info b{color:#f2ead9}
-.app-shell[data-theme="dark"] .backup-reminder-info span{color:#c9bfa8}
+.app-shell[data-theme="dark"] .backup-reminder-info>div>span{color:#c9bfa8}
 .pwa-preferences{border-top:1px solid #eeede8;margin-top:17px;padding-top:15px}
 .pwa-preferences h3{margin:0;color:#41443c;font:700 11px Manrope,sans-serif}
 .pwa-preferences>p{margin:5px 0 11px;color:#85887e;font-size:9px;line-height:1.5}
