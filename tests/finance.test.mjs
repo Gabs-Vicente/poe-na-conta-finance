@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { buildOccurrences, cardDueMonth, createBackup, csvCell, parseBackup, readStoredData, seed, validateData } from '../src/finance.ts'
+import { buildOccurrences, cardDueMonth, createBackup, csvCell, parseBackup, parseBackupFile, readStoredData, seed, validateData } from '../src/finance.ts'
 
 const card = { id: 'card', name: 'Principal', closingDay: 25, dueDay: 5 }
 
@@ -26,11 +26,27 @@ test('divide reembolso entre parcelas sem superar a parte correspondente', () =>
 
 test('valida dados e recupera apenas com envelope de backup suportado', () => {
   assert.equal(validateData(seed), true)
-  assert.deepEqual(parseBackup(createBackup(seed)), seed)
+  assert.deepEqual(parseBackup(createBackup(seed)), { ...seed, recurrences: [] })
   assert.equal(parseBackup(JSON.stringify({ format: 'nexus-finance-backup', version: 2, data: seed })), null)
   const loaded = readStoredData('{invalid json')
   assert.ok(loaded.warning)
   assert.equal(loaded.data.expenses.length, seed.expenses.length)
+})
+
+test('exporta e restaura preferências de perfil em backups versão 3', () => {
+  const preferences = { monthlyLimit: '1000', limitNoticePercent: '80', defaultView: 'Visão geral', theme: 'dark', profileName: 'Ana Souza', profilePhoto: 'data:image/png;base64,aGVsbG8=' }
+  const parsed = parseBackupFile(createBackup(seed, preferences))
+  assert.equal(parsed?.preferences?.profileName, 'Ana Souza')
+  assert.equal(parsed?.preferences?.profilePhoto, preferences.profilePhoto)
+  assert.equal(parsed?.preferences?.theme, 'dark')
+
+  const invalid = JSON.parse(createBackup(seed, preferences))
+  invalid.preferences.profilePhoto = 'https://example.com/avatar.png'
+  assert.equal(parseBackupFile(JSON.stringify(invalid)), null)
+
+  const defaultProfile = { ...preferences, profileName: '', profilePhoto: '' }
+  assert.deepEqual(parseBackupFile(createBackup(seed, defaultProfile))?.preferences?.profileName, '')
+  assert.equal(parseBackupFile(createBackup(seed, defaultProfile))?.preferences?.profilePhoto, '')
 })
 
 test('protege valores não confiáveis contra fórmulas e escapa separadores CSV', () => {

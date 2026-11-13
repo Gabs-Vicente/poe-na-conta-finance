@@ -7,6 +7,15 @@ export type Expense = { id: string; description: string; amount: number; date: s
 export type Recurrence = { id: string; description: string; amount: number; category: string; method: Method; cardId?: string; day: number; active: boolean; generatedMonths: string[]; skippedMonths: string[] }
 export type Occurrence = Expense & { part: number; month: string; value: number; allocatedShares: ParticipantShare[] }
 export type Data = { categories: Category[]; cards: Card[]; participants: Participant[]; expenses: Expense[]; recurrences?: Recurrence[] }
+export type BackupPreferences = {
+  monthlyLimit: string
+  limitNoticePercent: string
+  defaultView: 'Visão geral' | 'Lançamentos' | 'Relatórios' | 'Recorrências' | 'Ajustes'
+  theme: 'light' | 'dark'
+  profileName?: string
+  profilePhoto?: string
+}
+export type BackupPayload = { data: Data; preferences?: BackupPreferences }
 
 export const seed: Data = {
   categories: [{ id: 'moradia', name: 'Moradia', color: '#6e7f72' }, { id: 'alimentacao', name: 'Alimentação', color: '#b88b63' }, { id: 'transporte', name: 'Transporte', color: '#74858b' }, { id: 'lazer', name: 'Lazer', color: '#9b8193' }, { id: 'saude', name: 'Saúde', color: '#8b966d' }],
@@ -111,16 +120,23 @@ export const readStoredData = (raw: string | null): StoredData => {
   }
 }
 
-export const createBackup = (data: Data) => JSON.stringify({ format: 'nexus-finance-backup', version: 1, exportedAt: new Date().toISOString(), data }, null, 2)
-export const parseBackup = (raw: string): Data | null => {
+export const createBackup = (data: Data, preferences?: BackupPreferences) => JSON.stringify({ format: 'nexus-finance-backup', version: preferences ? 3 : 1, exportedAt: new Date().toISOString(), data, ...(preferences ? { preferences } : {}) }, null, 2)
+export const parseBackupFile = (raw: string): BackupPayload | null => {
   try {
     const backup: unknown = JSON.parse(raw)
-    if (!isRecord(backup) || backup.format !== 'nexus-finance-backup' || backup.version !== 1) return null
-    return normalizeData(backup.data)
+    if (!isRecord(backup) || backup.format !== 'nexus-finance-backup' || (backup.version !== 1 && backup.version !== 2 && backup.version !== 3)) return null
+    const data = normalizeData(backup.data)
+    if (!data) return null
+    if (backup.version === 1) return { data }
+    const preferences = backup.preferences
+    const views = ['Visão geral', 'Lançamentos', 'Relatórios', 'Recorrências', 'Ajustes']
+    if (!isRecord(preferences) || !isText(preferences.monthlyLimit) || (preferences.monthlyLimit !== '' && (!Number.isFinite(Number(preferences.monthlyLimit)) || Number(preferences.monthlyLimit) < 0)) || !isText(preferences.limitNoticePercent) || !Number.isInteger(Number(preferences.limitNoticePercent)) || Number(preferences.limitNoticePercent) < 1 || Number(preferences.limitNoticePercent) > 100 || !views.includes(String(preferences.defaultView)) || (preferences.theme !== 'light' && preferences.theme !== 'dark') || (preferences.profileName !== undefined && !isText(preferences.profileName)) || (preferences.profilePhoto !== undefined && (!isText(preferences.profilePhoto) || preferences.profilePhoto.length > 3_000_000 || (preferences.profilePhoto !== '' && !/^data:image\/(png|jpeg|webp);base64,/.test(preferences.profilePhoto))))) return null
+    return { data, preferences: { monthlyLimit: preferences.monthlyLimit, limitNoticePercent: preferences.limitNoticePercent, defaultView: preferences.defaultView as BackupPreferences['defaultView'], theme: preferences.theme as BackupPreferences['theme'], profileName: isText(preferences.profileName) ? preferences.profileName : '', profilePhoto: isText(preferences.profilePhoto) ? preferences.profilePhoto : '' } }
   } catch {
     return null
   }
 }
+export const parseBackup = (raw: string): Data | null => parseBackupFile(raw)?.data || null
 
 export const csvCell = (value: string | number, untrusted = false) => {
   let text = String(value)
