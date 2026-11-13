@@ -1,0 +1,129 @@
+export type Method = 'PIX' | 'Débito' | 'Crédito à vista' | 'Crédito parcelado'
+export type Category = { id: string; name: string; color: string }
+export type Card = { id: string; name: string; closingDay: number; dueDay: number }
+export type Participant = { id: string; name: string }
+export type ParticipantShare = { participantId: string; amount: number; installment?: number }
+export type Expense = { id: string; description: string; amount: number; date: string; category: string; method: Method; cardId?: string; installments: number; firstMonth: string; shares?: ParticipantShare[] }
+export type Recurrence = { id: string; description: string; amount: number; category: string; method: Method; cardId?: string; day: number; active: boolean; generatedMonths: string[]; skippedMonths: string[] }
+export type Occurrence = Expense & { part: number; month: string; value: number; allocatedShares: ParticipantShare[] }
+export type Data = { categories: Category[]; cards: Card[]; participants: Participant[]; expenses: Expense[]; recurrences?: Recurrence[] }
+
+export const seed: Data = {
+  categories: [{ id: 'moradia', name: 'Moradia', color: '#6e7f72' }, { id: 'alimentacao', name: 'Alimentação', color: '#b88b63' }, { id: 'transporte', name: 'Transporte', color: '#74858b' }, { id: 'lazer', name: 'Lazer', color: '#9b8193' }, { id: 'saude', name: 'Saúde', color: '#8b966d' }],
+  cards: [{ id: 'principal', name: 'Cartão principal', closingDay: 25, dueDay: 5 }],
+  participants: [],
+  expenses: [
+    { id: 'e1', description: 'Aluguel', amount: 1850, date: '2026-11-05', category: 'moradia', method: 'PIX', installments: 1, firstMonth: '2026-11' },
+    { id: 'e2', description: 'Mercado da semana', amount: 286.4, date: '2026-11-08', category: 'alimentacao', method: 'Débito', installments: 1, firstMonth: '2026-11' },
+    { id: 'e3', description: 'Fone bluetooth', amount: 599.9, date: '2026-11-10', category: 'lazer', method: 'Crédito parcelado', cardId: 'principal', installments: 3, firstMonth: '2026-12' },
+    { id: 'e4', description: 'Conta de luz', amount: 142.7, date: '2026-11-11', category: 'moradia', method: 'PIX', installments: 1, firstMonth: '2026-11' },
+    { id: 'e5', description: 'Combustível', amount: 220, date: '2026-11-12', category: 'transporte', method: 'Crédito à vista', cardId: 'principal', installments: 1, firstMonth: '2026-12' },
+  ],
+}
+
+export const monthKey = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+export const shiftMonth = (key: string, amount: number) => {
+  const [year, month] = key.split('-').map(Number)
+  return monthKey(new Date(year, month - 1 + amount, 1))
+}
+
+export const cardDueMonth = (purchaseDate: string, card: Card) => {
+  const purchaseMonth = monthKey(new Date(`${purchaseDate}T12:00:00`))
+  const purchaseDay = Number(purchaseDate.slice(-2))
+  const closingMonth = shiftMonth(purchaseMonth, purchaseDay >= card.closingDay ? 1 : 0)
+  return shiftMonth(closingMonth, card.dueDay <= card.closingDay ? 1 : 0)
+}
+
+export const buildOccurrences = (expenses: Expense[]): Occurrence[] => expenses.flatMap(expense => {
+  const count = Math.max(1, Math.round(expense.installments || 1))
+  const totalCents = Math.round(expense.amount * 100)
+  const base = Math.floor(totalCents / count)
+  const remainder = totalCents % count
+  const values = Array.from({ length: count }, (_, i) => base + (i < remainder ? 1 : 0))
+  const remaining = [...values]
+  const allocations = (expense.shares || []).map(share => {
+    const shareCents = Math.max(0, Math.round(share.amount * 100))
+    if (share.installment && share.installment >= 1 && share.installment <= count) {
+      const parts = Array.from({ length: count }, () => 0)
+      const index = share.installment - 1
+      parts[index] = Math.min(shareCents, remaining[index])
+      remaining[index] -= parts[index]
+      return { participantId: share.participantId, parts }
+    }
+    const shareBase = Math.floor(shareCents / count)
+    const shareRemainder = shareCents % count
+    const parts = Array.from({ length: count }, (_, i) => Math.min(shareBase + (i < shareRemainder ? 1 : 0), remaining[i]))
+    parts.forEach((part, i) => { remaining[i] -= part })
+    let unallocated = shareCents - parts.reduce((sum, part) => sum + part, 0)
+    for (let i = 0; i < count && unallocated > 0; i++) { const extra = Math.min(unallocated, remaining[i]); parts[i] += extra; remaining[i] -= extra; unallocated -= extra }
+    return { participantId: share.participantId, parts }
+  })
+  return values.map((value, i) => ({ ...expense, part: i + 1, month: shiftMonth(expense.firstMonth, i), value: value / 100, allocatedShares: allocations.map(share => ({ participantId: share.participantId, amount: share.parts[i] / 100 })).filter(share => share.amount > 0) }))
+})
+
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
+const isText = (value: unknown): value is string => typeof value === 'string'
+const isFiniteNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)
+const isDay = (value: unknown): value is number => Number.isInteger(value) && Number(value) >= 1 && Number(value) <= 31
+const isDate = (value: unknown): value is string => isText(value) && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(new Date(`${value}T12:00:00`).getTime()) && new Date(`${value}T12:00:00`).toISOString().slice(0, 10) === value
+const methods: Method[] = ['PIX', 'Débito', 'Crédito à vista', 'Crédito parcelado']
+
+export const validateData = (value: unknown): value is Data => {
+  if (!isRecord(value) || !Array.isArray(value.categories) || !Array.isArray(value.cards) || !Array.isArray(value.expenses)) return false
+  const participants = value.participants === undefined ? [] : value.participants
+  if (!Array.isArray(participants)) return false
+  if (!value.categories.every(item => isRecord(item) && isText(item.id) && isText(item.name) && isText(item.color))) return false
+  if (!value.cards.every(item => isRecord(item) && isText(item.id) && isText(item.name) && isDay(item.closingDay) && isDay(item.dueDay))) return false
+  if (!participants.every(item => isRecord(item) && isText(item.id) && isText(item.name))) return false
+  const recurrences = value.recurrences === undefined ? [] : value.recurrences
+  if (!Array.isArray(recurrences) || !recurrences.every(item => isRecord(item) && isText(item.id) && isText(item.description) && isFiniteNumber(item.amount) && item.amount > 0 && isText(item.category) && methods.includes(item.method as Method) && isDay(item.day) && typeof item.active === 'boolean' && (item.cardId === undefined || isText(item.cardId)) && Array.isArray(item.generatedMonths) && item.generatedMonths.every(isText) && Array.isArray(item.skippedMonths) && item.skippedMonths.every(isText))) return false
+  return value.expenses.every(item => {
+    if (!isRecord(item) || !isText(item.id) || !isText(item.description) || !isFiniteNumber(item.amount) || item.amount <= 0 || !isDate(item.date) || !isText(item.category) || !methods.includes(item.method as Method) || !Number.isInteger(item.installments) || Number(item.installments) < 1 || Number(item.installments) > 60 || !isText(item.firstMonth) || !/^\d{4}-\d{2}$/.test(item.firstMonth)) return false
+    if (item.cardId !== undefined && !isText(item.cardId)) return false
+    if (item.shares !== undefined && (!Array.isArray(item.shares) || !item.shares.every(share => isRecord(share) && isText(share.participantId) && isFiniteNumber(share.amount) && share.amount >= 0 && (share.installment === undefined || (Number.isInteger(share.installment) && Number(share.installment) >= 1 && Number(share.installment) <= 60))))) return false
+    return true
+  })
+}
+
+export const normalizeData = (value: unknown): Data | null => {
+  if (!validateData(value)) return null
+  const oldSeedColors: Record<string, string> = { moradia: '#6c7cf0', alimentacao: '#f1a455', transporte: '#5ab89b', lazer: '#db77a6', saude: '#64a9cf' }
+  const palette: Record<string, string> = { moradia: '#6e7f72', alimentacao: '#b88b63', transporte: '#74858b', lazer: '#9b8193', saude: '#8b966d' }
+  const categories = value.categories.map(category => category.color === oldSeedColors[category.id] ? { ...category, color: palette[category.id] } : category)
+  const expenses = value.expenses.map(expense => {
+    const card = value.cards.find(item => item.id === expense.cardId)
+    if (!card || !expense.method.startsWith('Crédito')) return expense
+    const purchaseMonth = monthKey(new Date(`${expense.date}T12:00:00`))
+    const oldDueMonth = shiftMonth(purchaseMonth, Number(expense.date.slice(-2)) >= card.closingDay ? 1 : 0)
+    return expense.firstMonth === oldDueMonth ? { ...expense, firstMonth: cardDueMonth(expense.date, card) } : expense
+  })
+  return { ...value, categories, expenses, participants: value.participants || [], recurrences: value.recurrences || [] } as Data
+}
+
+export type StoredData = { data: Data; warning?: string }
+export const readStoredData = (raw: string | null): StoredData => {
+  if (!raw) return { data: structuredClone(seed) }
+  try {
+    const data = normalizeData(JSON.parse(raw) as unknown)
+    return data ? { data } : { data: structuredClone(seed), warning: 'Os dados salvos não passaram na validação. Seus dados originais continuam no navegador; importe um backup válido antes de salvar novos lançamentos.' }
+  } catch {
+    return { data: structuredClone(seed), warning: 'Não foi possível ler os dados salvos. Eles continuam no navegador; importe um backup válido antes de salvar novos lançamentos.' }
+  }
+}
+
+export const createBackup = (data: Data) => JSON.stringify({ format: 'nexus-finance-backup', version: 1, exportedAt: new Date().toISOString(), data }, null, 2)
+export const parseBackup = (raw: string): Data | null => {
+  try {
+    const backup: unknown = JSON.parse(raw)
+    if (!isRecord(backup) || backup.format !== 'nexus-finance-backup' || backup.version !== 1) return null
+    return normalizeData(backup.data)
+  } catch {
+    return null
+  }
+}
+
+export const csvCell = (value: string | number, untrusted = false) => {
+  let text = String(value)
+  if (untrusted && /^[\s]*[=+\-@]/.test(text)) text = `'${text}`
+  return `"${text.replaceAll('"', '""')}"`
+}

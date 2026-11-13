@@ -1,37 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
+import { buildOccurrences as calculateOccurrences, cardDueMonth as calculateCardDueMonth, createBackup, csvCell, monthKey, parseBackup, readStoredData, shiftMonth as shiftMonthKey, type Card, type Category, type Data, type Expense, type Method, type Participant, type Recurrence } from './finance'
 
-type Method = 'PIX' | 'Débito' | 'Crédito à vista' | 'Crédito parcelado'
-type Category = { id: string; name: string; color: string }
-type Card = { id: string; name: string; closingDay: number; dueDay: number }
-type Participant = { id: string; name: string }
-type ParticipantShare = { participantId: string; amount: number; installment?: number }
-type Expense = { id: string; description: string; amount: number; date: string; category: string; method: Method; cardId?: string; installments: number; firstMonth: string; shares?: ParticipantShare[] }
-type Occurrence = Expense & { part: number; month: string; value: number; allocatedShares: ParticipantShare[] }
-type Data = { categories: Category[]; cards: Card[]; participants?: Participant[]; expenses: Expense[] }
 type ExpenseForm = { description: string; amount: string; date: string; category: string; method: Method; cardId: string; installments: string; shares: { participantId: string; amount: string; installment: string }[] }
 type SettingEditor = { kind: 'category' | 'card' | 'participant'; id?: string; name: string; color: string; closingDay: string; dueDay: string }
+type RecurrenceEditor = { id?: string; description: string; amount: string; category: string; method: Method; cardId: string; day: string }
 
-const seed: Data = {
-  categories: [{ id: 'moradia', name: 'Moradia', color: '#6e7f72' }, { id: 'alimentacao', name: 'Alimentação', color: '#b88b63' }, { id: 'transporte', name: 'Transporte', color: '#74858b' }, { id: 'lazer', name: 'Lazer', color: '#9b8193' }, { id: 'saude', name: 'Saúde', color: '#8b966d' }],
-  cards: [{ id: 'principal', name: 'Cartão principal', closingDay: 25, dueDay: 5 }],
-  participants: [],
-  expenses: [
-    { id: 'e1', description: 'Aluguel', amount: 1850, date: '2026-11-05', category: 'moradia', method: 'PIX', installments: 1, firstMonth: '2026-11' },
-    { id: 'e2', description: 'Mercado da semana', amount: 286.4, date: '2026-11-08', category: 'alimentacao', method: 'Débito', installments: 1, firstMonth: '2026-11' },
-    { id: 'e3', description: 'Fone bluetooth', amount: 599.9, date: '2026-11-10', category: 'lazer', method: 'Crédito parcelado', cardId: 'principal', installments: 3, firstMonth: '2026-12' },
-    { id: 'e4', description: 'Conta de luz', amount: 142.7, date: '2026-11-11', category: 'moradia', method: 'PIX', installments: 1, firstMonth: '2026-11' },
-    { id: 'e5', description: 'Combustível', amount: 220, date: '2026-11-12', category: 'transporte', method: 'Crédito à vista', cardId: 'principal', installments: 1, firstMonth: '2026-12' },
-  ],
-}
-const monthKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
-const shiftMonth = (key: string, amount: number) => { const [y, m] = key.split('-').map(Number); return monthKey(new Date(y, m - 1 + amount, 1)) }
-const cardDueMonth = (purchaseDate: string, card: Card) => {
-  const purchaseMonth = monthKey(new Date(`${purchaseDate}T12:00:00`))
-  const purchaseDay = Number(purchaseDate.slice(-2))
-  const closingMonth = shiftMonth(purchaseMonth, purchaseDay >= card.closingDay ? 1 : 0)
-  return shiftMonth(closingMonth, card.dueDay <= card.closingDay ? 1 : 0)
-}
 const money = (n: number) => n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 const monthName = (key: string) => { const [y, m] = key.split('-').map(Number); return new Intl.DateTimeFormat('pt-BR', { month: 'long', year: 'numeric' }).format(new Date(y, m - 1, 1)) }
 const piePoint = (degrees: number, radius: number) => { const angle = (degrees - 90) * Math.PI / 180; return [50 + radius * Math.cos(angle), 50 + radius * Math.sin(angle)] }
@@ -41,39 +15,17 @@ const donutSlice = (start: number, end: number) => {
   const largeArc = end - start > 180 ? 1 : 0
   return `M ${outerStart[0]} ${outerStart[1]} A 46 46 0 ${largeArc} 1 ${outerEnd[0]} ${outerEnd[1]} L ${innerEnd[0]} ${innerEnd[1]} A 28 28 0 ${largeArc} 0 ${innerStart[0]} ${innerStart[1]} Z`
 }
-const readData = (): Data => { try { const raw = localStorage.getItem('conta-clara-v1'); if (!raw) return seed; const saved = JSON.parse(raw) as Data; const oldSeedColors: Record<string, string> = { moradia: '#6c7cf0', alimentacao: '#f1a455', transporte: '#5ab89b', lazer: '#db77a6', saude: '#64a9cf' }; const palette: Record<string, string> = { moradia: '#6e7f72', alimentacao: '#b88b63', transporte: '#74858b', lazer: '#9b8193', saude: '#8b966d' }; const categories = saved.categories.map(category => category.color === oldSeedColors[category.id] ? { ...category, color: palette[category.id] } : category); const expenses = saved.expenses.map(expense => { const card = saved.cards.find(item => item.id === expense.cardId); if (!card || !expense.method.startsWith('Crédito')) return expense; const purchaseMonth = monthKey(new Date(`${expense.date}T12:00:00`)); const oldDueMonth = shiftMonth(purchaseMonth, Number(expense.date.slice(-2)) >= card.closingDay ? 1 : 0); return expense.firstMonth === oldDueMonth ? { ...expense, firstMonth: cardDueMonth(expense.date, card) } : expense }); return { ...saved, categories, expenses, participants: saved.participants || [] } } catch { return seed } }
-const buildOccurrences = (expenses: Expense[]): Occurrence[] => expenses.flatMap(expense => {
-  const count = Math.max(1, Math.round(expense.installments || 1))
-  const totalCents = Math.round(expense.amount * 100)
-  const base = Math.floor(totalCents / count)
-  const remainder = totalCents % count
-  const values = Array.from({ length: count }, (_, i) => base + (i < remainder ? 1 : 0))
-  const remaining = [...values]
-  const allocations = (expense.shares || []).map(share => {
-    const shareCents = Math.max(0, Math.round(share.amount * 100))
-    if (share.installment && share.installment >= 1 && share.installment <= count) {
-      const parts = Array.from({ length: count }, () => 0)
-      const index = share.installment - 1
-      parts[index] = Math.min(shareCents, remaining[index])
-      remaining[index] -= parts[index]
-      return { participantId: share.participantId, parts }
-    }
-    const shareBase = Math.floor(shareCents / count)
-    const shareRemainder = shareCents % count
-    const parts = Array.from({ length: count }, (_, i) => Math.min(shareBase + (i < shareRemainder ? 1 : 0), remaining[i]))
-    parts.forEach((part, i) => { remaining[i] -= part })
-    let unallocated = shareCents - parts.reduce((sum, part) => sum + part, 0)
-    for (let i = 0; i < count && unallocated > 0; i++) { const extra = Math.min(unallocated, remaining[i]); parts[i] += extra; remaining[i] -= extra; unallocated -= extra }
-    return { participantId: share.participantId, parts }
-  })
-  return values.map((value, i) => ({ ...expense, part: i + 1, month: shiftMonth(expense.firstMonth, i), value: value / 100, allocatedShares: allocations.map(share => ({ participantId: share.participantId, amount: share.parts[i] / 100 })).filter(share => share.amount > 0) }))
-})
 const today = new Date()
 
 function App() {
-  const [data, setData] = useState<Data>(readData)
+  const [storedData] = useState(() => readStoredData(localStorage.getItem('conta-clara-v1')))
+  const [data, setData] = useState<Data>(storedData.data)
+  const [storageWarning, setStorageWarning] = useState(storedData.warning || '')
+  const [backupMessage, setBackupMessage] = useState('')
+  const backupInput = useRef<HTMLInputElement>(null)
   const [month, setMonth] = useState(monthKey(today))
-  const [view, setView] = useState<'Visão geral' | 'Lançamentos' | 'Relatórios' | 'Ajustes'>('Visão geral')
+  const [view, setView] = useState<'Visão geral' | 'Lançamentos' | 'Relatórios' | 'Recorrências' | 'Ajustes'>('Visão geral')
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => localStorage.getItem('nexus-theme') === 'dark' ? 'dark' : 'light')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem('conta-clara-sidebar-collapsed') === 'true')
   const [query, setQuery] = useState('')
   const [categoryFilter, setCategoryFilter] = useState('Todas as categorias')
@@ -83,11 +35,13 @@ function App() {
   const [modal, setModal] = useState(false)
   const [editingExpenseId, setEditingExpenseId] = useState<string | null>(null)
   const [settingsModal, setSettingsModal] = useState<SettingEditor | null>(null)
+  const [recurrenceEditor, setRecurrenceEditor] = useState<RecurrenceEditor | null>(null)
+  const [recurrenceSelection, setRecurrenceSelection] = useState<string[] | null>(null)
   const [form, setForm] = useState<ExpenseForm>({ description: '', amount: '', date: today.toISOString().slice(0, 10), category: '', method: 'PIX', cardId: '', installments: '1', shares: [] })
   const [shareError, setShareError] = useState('')
   const [returnToExpenseAfterParticipant, setReturnToExpenseAfterParticipant] = useState(false)
   const selectedFormCard = data.cards.find(card => card.id === form.cardId)
-  const creditDueMonth = form.method.startsWith('Crédito') && selectedFormCard && form.date ? cardDueMonth(form.date, selectedFormCard) : ''
+  const creditDueMonth = form.method.startsWith('Crédito') && selectedFormCard && form.date ? calculateCardDueMonth(form.date, selectedFormCard) : ''
   useEffect(() => {
     const closeMenus = (event: MouseEvent) => {
       if (!(event.target instanceof Element) || !event.target.closest('.row-actions')) document.querySelectorAll<HTMLDetailsElement>('.row-actions[open]').forEach(menu => menu.removeAttribute('open'))
@@ -95,11 +49,15 @@ function App() {
     document.addEventListener('click', closeMenus)
     return () => document.removeEventListener('click', closeMenus)
   }, [])
-  useEffect(() => {
-    if (!settingsModal && returnToExpenseAfterParticipant) { setReturnToExpenseAfterParticipant(false); setModal(true) }
-  }, [settingsModal, returnToExpenseAfterParticipant])
-  const save = (next: Data) => { setData(next); localStorage.setItem('conta-clara-v1', JSON.stringify(next)) }
-  const occurrences = useMemo(() => buildOccurrences(data.expenses.filter(e => (e as Expense & { kind?: string }).kind !== 'income')), [data.expenses])
+  const closeSettingsModal = () => {
+    setSettingsModal(null)
+    if (returnToExpenseAfterParticipant) { setReturnToExpenseAfterParticipant(false); setModal(true) }
+  }
+  const save = (next: Data, recoveringStorage = false) => {
+    if (storageWarning && !recoveringStorage) { setBackupMessage('Importe um backup válido antes de alterar os dados salvos.'); return }
+    localStorage.setItem('conta-clara-v1', JSON.stringify(next)); setData(next); setStorageWarning('')
+  }
+  const occurrences = useMemo(() => calculateOccurrences(data.expenses.filter(e => (e as Expense & { kind?: string }).kind !== 'income')), [data.expenses])
   const current = occurrences.filter(e => e.month === month)
   const currentExpenses = current
   const personalValue = (e: typeof occurrences[number]) => Math.max(0, e.value - e.allocatedShares.reduce((sum, share) => sum + share.amount, 0))
@@ -109,8 +67,8 @@ function App() {
   const reimbursementTotal = currentExpenses.reduce((sum, e) => sum + e.allocatedShares.reduce((shareSum, share) => shareSum + share.amount, 0), 0)
   const categoryTotals = data.categories.map(c => ({ ...c, total: currentExpenses.filter(e => e.category === c.id).reduce((s, e) => s + personalValue(e), 0) })).filter(c => c.total > 0).sort((a, b) => b.total - a.total)
   const reimbursementByParticipant = (data.participants || []).map(participant => ({ participant, current: currentExpenses.reduce((sum, e) => sum + e.allocatedShares.filter(s => s.participantId === participant.id).reduce((a, s) => a + s.amount, 0), 0), future: occurrences.filter(e => e.month > month).reduce((sum, e) => sum + e.allocatedShares.filter(s => s.participantId === participant.id).reduce((a, s) => a + s.amount, 0), 0) })).filter(x => x.current > 0 || x.future > 0)
-  const nextMonths = Array.from({ length: 5 }, (_, i) => shiftMonth(month, i))
-  const previousMonth = shiftMonth(month, -1)
+  const nextMonths = Array.from({ length: 5 }, (_, i) => shiftMonthKey(month, i))
+  const previousMonth = shiftMonthKey(month, -1)
   const previousTotal = occurrences.filter(e => e.month === previousMonth).reduce((s, e) => s + personalValue(e), 0)
   const monthChange = previousTotal ? ((total - previousTotal) / previousTotal) * 100 : null
   const upcomingTotal = occurrences.filter(e => e.month > month).reduce((s, e) => s + personalValue(e), 0)
@@ -123,11 +81,37 @@ function App() {
   })
   const trendYearTotal = monthlyTrend.reduce((sum, item) => sum + item.total, 0)
   const categoryTotal = categoryTotals.reduce((sum, c) => sum + c.total, 0)
-  let pieCursor = 0
-  const pieSlices = categoryTotals.map(category => { const start = pieCursor; pieCursor += category.total / categoryTotal * 360; return { category, start, end: pieCursor, percentage: Math.round(category.total / categoryTotal * 100) } })
+  const pieSlices = categoryTotals.reduce<Array<{ category: Category & { total: number }; start: number; end: number; percentage: number }>>((slices, category) => { const start = slices.at(-1)?.end || 0; const end = start + category.total / categoryTotal * 360; return [...slices, { category, start, end, percentage: Math.round(category.total / categoryTotal * 100) }] }, [])
   const hoveredCategory = pieSlices.find(slice => slice.category.id === hoveredCategoryId)
   const closeActionMenu = (event: React.MouseEvent<HTMLButtonElement>, action: () => void) => { event.currentTarget.closest('details')?.removeAttribute('open'); action() }
   const toggleSidebar = () => setSidebarCollapsed(collapsed => { const next = !collapsed; localStorage.setItem('conta-clara-sidebar-collapsed', String(next)); return next })
+  const toggleTheme = () => setTheme(current => { const next = current === 'dark' ? 'light' : 'dark'; localStorage.setItem('nexus-theme', next); return next })
+  const recurrences = data.recurrences || []
+  const pendingRecurrences = recurrences.filter(item => item.active && !item.generatedMonths.includes(month) && !item.skippedMonths.includes(month))
+  const selectedRecurrences = recurrenceSelection ?? pendingRecurrences.map(item => item.id)
+  const openRecurrence = (item?: Recurrence) => setRecurrenceEditor({ id: item?.id, description: item?.description || '', amount: item ? String(item.amount) : '', category: item?.category || data.categories[0]?.id || '', method: item?.method || 'PIX', cardId: item?.cardId || data.cards[0]?.id || '', day: String(item?.day || 1) })
+  const saveRecurrence = (event: React.FormEvent) => {
+    event.preventDefault()
+    if (!recurrenceEditor) return
+    const previous = recurrenceEditor.id ? recurrences.find(value => value.id === recurrenceEditor.id) : undefined
+    const item: Recurrence = { id: recurrenceEditor.id || crypto.randomUUID(), description: recurrenceEditor.description.trim(), amount: Number(recurrenceEditor.amount), category: recurrenceEditor.category, method: recurrenceEditor.method, cardId: recurrenceEditor.method.startsWith('Crédito') ? recurrenceEditor.cardId || undefined : undefined, day: Number(recurrenceEditor.day), active: previous?.active ?? true, generatedMonths: previous?.generatedMonths || [], skippedMonths: previous?.skippedMonths || [] }
+    save({ ...data, recurrences: recurrenceEditor.id ? recurrences.map(value => value.id === item.id ? item : value) : [...recurrences, item] })
+    setRecurrenceEditor(null)
+  }
+  const confirmRecurrences = () => {
+    const chosen = pendingRecurrences.filter(item => selectedRecurrences.includes(item.id))
+    if (!chosen.length) return
+    const generated: Expense[] = chosen.map(item => {
+      const date = `${month}-${String(Math.min(item.day, new Date(Number(month.slice(0, 4)), Number(month.slice(5)) , 0).getDate())).padStart(2, '0')}`
+      const card = data.cards.find(value => value.id === item.cardId)
+      const firstMonth = item.method.startsWith('Crédito') && card ? calculateCardDueMonth(date, card) : month
+      return { id: crypto.randomUUID(), description: item.description, amount: item.amount, date, category: item.category, method: item.method, cardId: card?.id, installments: 1, firstMonth }
+    })
+    const ids = new Set(chosen.map(item => item.id))
+    save({ ...data, expenses: [...generated, ...data.expenses], recurrences: recurrences.map(item => ids.has(item.id) ? { ...item, generatedMonths: [...item.generatedMonths, month] } : item) })
+    setRecurrenceSelection(null)
+  }
+  const skipRecurrence = (id: string) => { setRecurrenceSelection(selectedRecurrences.filter(value => value !== id)); save({ ...data, recurrences: recurrences.map(item => item.id === id ? { ...item, skippedMonths: [...item.skippedMonths, month] } : item) }) }
 
   const addExpense = (ev: React.FormEvent) => {
     ev.preventDefault()
@@ -146,7 +130,7 @@ function App() {
     }
     if (allocated.some((cents, i) => cents > partValues[i])) { setShareError('A soma atribuída aos participantes não pode superar o valor da parcela correspondente.'); return }
     const card = data.cards.find(c => c.id === form.cardId)
-    const firstMonth = form.method.startsWith('Crédito') && card ? cardDueMonth(form.date, card) : monthKey(new Date(`${form.date}T12:00:00`))
+    const firstMonth = form.method.startsWith('Crédito') && card ? calculateCardDueMonth(form.date, card) : monthKey(new Date(`${form.date}T12:00:00`))
     const entry: Expense = { id: editingExpenseId || crypto.randomUUID(), description: form.description.trim(), amount, date: form.date, category: form.category || data.categories[0]?.id || '', method: form.method, cardId: card?.id, installments: form.method === 'Crédito parcelado' ? Math.max(1, n) : 1, firstMonth, shares }
     save({ ...data, expenses: editingExpenseId ? data.expenses.map(e => e.id === editingExpenseId ? entry : e) : [entry, ...data.expenses] })
     setModal(false)
@@ -164,8 +148,30 @@ function App() {
   const deleteExpense = (id: string) => save({ ...data, expenses: data.expenses.filter(e => e.id !== id) })
   const downloadCsv = () => {
     const rows = [['Descrição','Valor da parcela','Parte pessoal','A receber','Parcela','Mês','Categoria','Pagamento','Participantes'], ...current.map(e => [e.description, e.value.toFixed(2), personalValue(e).toFixed(2), e.allocatedShares.reduce((sum, share) => sum + share.amount, 0).toFixed(2), `${e.part}/${e.installments}`, e.month, data.categories.find(c => c.id === e.category)?.name || '', e.method, e.allocatedShares.map(share => data.participants?.find(p => p.id === share.participantId)?.name || 'Participante').join(', ')])]
-    const blob = new Blob(['\ufeff' + rows.map(r => r.join(';')).join('\n')], { type: 'text/csv;charset=utf-8' })
+    const untrustedColumns = new Set([0, 6, 7, 8])
+    const blob = new Blob(['\ufeff' + rows.map(row => row.map((cell, index) => csvCell(cell, untrustedColumns.has(index))).join(';')).join('\n')], { type: 'text/csv;charset=utf-8' })
     const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `relatorio-${month}.csv`; a.click(); URL.revokeObjectURL(url)
+  }
+  const downloadBackup = () => {
+    if (storageWarning) { setBackupMessage('Importe um backup válido antes de baixar uma cópia dos dados.'); return }
+    const blob = new Blob([createBackup(data)], { type: 'application/json;charset=utf-8' })
+    const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `nexus-finance-backup-${new Date().toISOString().slice(0, 10)}.json`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000)
+    setBackupMessage('Backup baixado. Guarde o arquivo em um local seguro.')
+  }
+  const importBackup = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+    try {
+      const imported = parseBackup(await file.text())
+      if (!imported) { setBackupMessage('Este arquivo não é um backup válido do Nexus Finance.'); return }
+      if (!window.confirm('Importar este backup substituirá os dados atuais neste navegador. Deseja continuar?')) return
+      save(imported, true)
+      setBackupMessage('Backup importado com sucesso.')
+    } catch {
+      setBackupMessage('Não foi possível ler o arquivo selecionado.')
+    } finally {
+      event.target.value = ''
+    }
   }
   const openCategory = (category?: Category) => setSettingsModal({ kind: 'category', id: category?.id, name: category?.name || '', color: category?.color || '#6e7f72', closingDay: '25', dueDay: '5' })
   const openCard = (card?: Card) => setSettingsModal({ kind: 'card', id: card?.id, name: card?.name || '', color: '#65a987', closingDay: String(card?.closingDay || 25), dueDay: String(card?.dueDay || 5) })
@@ -193,18 +199,24 @@ function App() {
     <div className="table-foot"><span>Mostrando <b>{filtered.length}</b> de <b>{current.length}</b> lançamentos</span><span>Gastos pessoais <b>{money(total)}</b> · A receber <b>{money(reimbursementTotal)}</b></span></div>
   </section>
 
-  return <div className={`app-shell ${sidebarCollapsed ? 'sidebar-is-collapsed' : ''}`}>
-    <header className="site-header"><a className="brand" href="#" onClick={() => setView('Visão geral')}><span className="brand-mark"><svg viewBox="0 0 40 40" aria-hidden="true"><path d="M9 29V11h5l12 13V11h5v18h-5L14 16v13z" fill="currentColor"/><path d="M31 7l1.2 2.8L35 11l-2.8 1.2L31 15l-1.2-2.8L27 11l2.8-1.2z" fill="#9ce7b7"/></svg></span><span>Nexus <span className="brand-light">Finance</span><small>GESTÃO FINANCEIRA</small></span></a><button className="sidebar-toggle" onClick={toggleSidebar} title={sidebarCollapsed ? 'Expandir navegação' : 'Recolher navegação'} aria-label={sidebarCollapsed ? 'Expandir navegação' : 'Recolher navegação'}>{sidebarCollapsed ? '›' : '‹'}</button><div className="side-label">MENU</div><nav>{(['Visão geral','Lançamentos','Relatórios','Ajustes'] as const).map((v, i) => <button key={v} className={`nav-item ${view === v ? 'active' : ''}`} onClick={() => setView(v)} title={sidebarCollapsed ? v : undefined}><span className="nav-icon">{['◫','↔','▥','⚙'][i]}</span><span className="nav-label">{v}</span></button>)}</nav><div className="side-bottom"><div className="privacy"><span className="lock">♧</span><div><b>Seus dados são privados</b><span>Salvos apenas neste dispositivo</span></div></div><div className="profile"><div className="avatar">GV</div><div><b>Meu espaço</b><span>Plano pessoal</span></div><span className="dots">···</span></div></div></header>
-    <main className="main"><header className="topbar"><div className="breadcrumb">Nexus Finance <span>/</span> {view}</div><div className="top-actions"><span className="today">◷ &nbsp;{new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' }).format(today)}</span><button className="icon-btn" aria-label="Notificações">♧<i /></button><div className="avatar small">GV</div></div></header>
+  return <div className={`app-shell ${sidebarCollapsed ? 'sidebar-is-collapsed' : ''}`} data-theme={theme}>
+    <header className="site-header"><a className="brand" href="#" onClick={() => setView('Visão geral')}><span className="brand-mark"><svg viewBox="0 0 40 40" aria-hidden="true"><path d="M9 29V11h5l12 13V11h5v18h-5L14 16v13z" fill="currentColor"/><path d="M31 7l1.2 2.8L35 11l-2.8 1.2L31 15l-1.2-2.8L27 11l2.8-1.2z" fill="#9ce7b7"/></svg></span><span>Nexus <span className="brand-light">Finance</span><small>GESTÃO FINANCEIRA</small></span></a><button className="sidebar-toggle" onClick={toggleSidebar} title={sidebarCollapsed ? 'Expandir navegação' : 'Recolher navegação'} aria-label={sidebarCollapsed ? 'Expandir navegação' : 'Recolher navegação'}>{sidebarCollapsed ? '›' : '‹'}</button><div className="side-label">MENU</div><nav>{(['Visão geral','Lançamentos','Relatórios','Recorrências','Ajustes'] as const).map((v, i) => <button key={v} className={`nav-item ${view === v ? 'active' : ''}`} onClick={() => setView(v)} title={sidebarCollapsed ? v : undefined}><span className="nav-icon">{['◫','↔','▥','↻','⚙'][i]}</span><span className="nav-label">{v}</span></button>)}</nav><div className="side-bottom"><div className="privacy"><span className="lock">♧</span><div><b>Seus dados são privados</b><span>Salvos apenas neste dispositivo</span></div></div><div className="profile"><div className="avatar">GV</div><div><b>Meu espaço</b><span>Plano pessoal</span></div><span className="dots">···</span></div></div></header>
+    <main className="main"><header className="topbar"><div className="breadcrumb">Nexus Finance <span>/</span> {view}</div><div className="top-actions"><span className="today">◷ &nbsp;{new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' }).format(today)}</span><button className={`theme-switch ${theme === 'dark' ? 'is-dark' : ''}`} onClick={toggleTheme} aria-label={theme === 'dark' ? 'Ativar tema claro' : 'Ativar tema escuro'} title={theme === 'dark' ? 'Ativar tema claro' : 'Ativar tema escuro'}><span className="theme-switch-track" aria-hidden="true"><span className="theme-switch-thumb">{theme === 'dark' ? <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4" /><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42" /></svg> : <svg viewBox="0 0 24 24"><path d="M20.2 15.4A8.5 8.5 0 0 1 8.6 3.8 8.5 8.5 0 1 0 20.2 15.4Z" /></svg>}</span></span><span className="theme-switch-label">{theme === 'dark' ? 'Tema claro' : 'Tema escuro'}</span></button><div className="avatar small">GV</div></div></header>
       <div className="content" key={view}>
-        <div className="heading-row"><div><div className="eyebrow">{new Intl.DateTimeFormat('pt-BR', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' }).format(today).toLocaleUpperCase('pt-BR')}</div><h1>{view}</h1><p className="subtitle">{view === 'Visão geral' ? 'Uma leitura clara dos seus gastos e compromissos.' : view === 'Lançamentos' ? 'Encontre e acompanhe cada movimentação.' : view === 'Relatórios' ? 'Entenda como seus gastos se distribuem ao longo do tempo.' : 'Personalize categorias, cartões e pessoas com quem divide despesas.'}</p></div>{view !== 'Ajustes' && <button className="primary" onClick={() => { setEditingExpenseId(null); setShareError(''); setForm({ description: '', amount: '', date: today.toISOString().slice(0, 10), category: data.categories[0]?.id || '', method: 'PIX', cardId: data.cards[0]?.id || '', installments: '1', shares: [] }); setModal(true) }}><span>＋</span> Nova despesa</button>}</div>
-        {view !== 'Ajustes' && <div className="monthbar"><button className="month-arrow" onClick={() => setMonth(shiftMonth(month, -1))}>‹</button><span>{monthName(month)}</span><button className="month-arrow" onClick={() => setMonth(shiftMonth(month, 1))}>›</button><button className="today-btn" onClick={() => setMonth(monthKey(today))}>Hoje</button></div>}
+        <div className="heading-row"><div><div className="eyebrow">{new Intl.DateTimeFormat('pt-BR', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' }).format(today).toLocaleUpperCase('pt-BR')}</div><h1>{view}</h1><p className="subtitle">{view === 'Visão geral' ? 'Uma leitura clara dos seus gastos e compromissos.' : view === 'Lançamentos' ? 'Encontre e acompanhe cada movimentação.' : view === 'Relatórios' ? 'Entenda como seus gastos se distribuem ao longo do tempo.' : view === 'Recorrências' ? 'Revise as despesas que se repetem antes de lançar no mês.' : 'Personalize categorias, cartões e pessoas com quem divide despesas.'}</p></div>{view !== 'Ajustes' && <button className="primary" onClick={() => view === 'Recorrências' ? openRecurrence() : (setEditingExpenseId(null), setShareError(''), setForm({ description: '', amount: '', date: today.toISOString().slice(0, 10), category: data.categories[0]?.id || '', method: 'PIX', cardId: data.cards[0]?.id || '', installments: '1', shares: [] }), setModal(true))}><span>＋</span> {view === 'Recorrências' ? 'Nova recorrência' : 'Nova despesa'}</button>}</div>
+        {storageWarning && <div className="backup-warning" role="alert">{storageWarning} Acesse <b>Ajustes → Seus dados</b> para importar um backup válido.</div>}
+        {view !== 'Ajustes' && <div className="monthbar"><button className="month-arrow" onClick={() => { setMonth(shiftMonthKey(month, -1)); setRecurrenceSelection(null) }}>‹</button><span>{monthName(month)}</span><button className="month-arrow" onClick={() => { setMonth(shiftMonthKey(month, 1)); setRecurrenceSelection(null) }}>›</button><button className="today-btn" onClick={() => { setMonth(monthKey(today)); setRecurrenceSelection(null) }}>Hoje</button></div>}
 
         {view === 'Ajustes' ? <section className="settings-grid">
           <div className="panel settings-panel"><div className="panel-head"><div><h2>Categorias</h2><p>Organize e identifique seus gastos.</p></div><button className="outline-btn" onClick={() => openCategory()}>＋ Nova categoria</button></div>{data.categories.map(c => <div className="setting-row" key={c.id}><i className="dot" style={{ background: c.color }} /><b>{c.name}</b><details className="row-actions"><summary aria-label={`Ações para a categoria ${c.name}`} title="Ações">···</summary><div className="row-action-menu"><button onClick={event => closeActionMenu(event, () => openCategory(c))}>Editar</button><button className="danger" onClick={event => closeActionMenu(event, () => save({ ...data, categories: data.categories.filter(x => x.id !== c.id) }))}>Remover</button></div></details></div>)}</div>
           <div className="panel settings-panel"><div className="panel-head"><div><h2>Cartões</h2><p>Configure fechamento e vencimento da fatura.</p></div><button className="outline-btn" onClick={() => openCard()}>＋ Novo cartão</button></div>{data.cards.map(c => <div className="setting-row" key={c.id}><span className="card-icon">▣</span><b>{c.name}</b><span className="card-days">Fecha dia {c.closingDay} · Vence dia {c.dueDay}</span><details className="row-actions"><summary aria-label={`Ações para o cartão ${c.name}`} title="Ações">···</summary><div className="row-action-menu"><button onClick={event => closeActionMenu(event, () => openCard(c))}>Editar</button><button className="danger" onClick={event => closeActionMenu(event, () => save({ ...data, cards: data.cards.filter(x => x.id !== c.id) }))}>Remover</button></div></details></div>)}</div>
           <div className="panel settings-panel"><div className="panel-head"><div><h2>Participantes</h2><p>Pessoas que dividem despesas com você.</p></div><button className="outline-btn" onClick={() => openParticipant()}>＋ Novo participante</button></div>{(data.participants || []).length ? (data.participants || []).map(participant => <div className="setting-row" key={participant.id}><span className="participant-avatar">{participant.name.slice(0, 1).toUpperCase()}</span><b>{participant.name}</b><details className="row-actions"><summary aria-label={`Ações para ${participant.name}`} title="Ações">···</summary><div className="row-action-menu"><button onClick={event => closeActionMenu(event, () => openParticipant(participant))}>Editar</button><button className="danger" onClick={event => closeActionMenu(event, () => removeParticipant(participant.id))}>Remover</button></div></details></div>) : <div className="empty compact">Adicione pessoas para acompanhar o que elas precisam reembolsar.</div>}</div>
-          <div className="panel backup"><h2>Seus dados</h2><p>Os lançamentos ficam salvos localmente neste navegador. Exporte o relatório mensal em CSV para guardar uma cópia.</p><button className="outline-btn" onClick={downloadCsv}>↓ Exportar mês em CSV</button></div>
+          <div className="panel backup"><h2>Seus dados</h2><p>Os lançamentos ficam salvos localmente neste navegador. Baixe um backup completo para preservar categorias, cartões, participantes e despesas.</p><div className="backup-actions"><button className="outline-btn" onClick={downloadBackup}>Baixar backup JSON</button><button className="outline-btn" onClick={() => backupInput.current?.click()}>Importar backup</button><input ref={backupInput} type="file" accept="application/json,.json" hidden onChange={importBackup} /></div>{backupMessage && <p className="backup-message" role="status">{backupMessage}</p>}{storageWarning && <p className="backup-warning" role="alert">{storageWarning}</p>}<button className="outline-btn" onClick={downloadCsv}>↓ Exportar mês em CSV</button></div>
+        </section> : view === 'Recorrências' ? <section className="recurrence-page">
+          <div className="panel recurrence-review"><div className="panel-head"><div><h2>Revisão de {monthName(month)}</h2><p>Confirme só as cobranças que aconteceram neste mês.</p></div><span className="stat-symbol muted">↻</span></div>
+            {pendingRecurrences.length ? <><div className="recurrence-review-tools"><label><input type="checkbox" checked={pendingRecurrences.every(item => selectedRecurrences.includes(item.id))} onChange={event => setRecurrenceSelection(event.target.checked ? pendingRecurrences.map(item => item.id) : [])} /> Selecionar todas</label><span>{pendingRecurrences.length} para revisar</span></div><div className="recurrence-list">{pendingRecurrences.map(item => { const category = data.categories.find(value => value.id === item.category); return <div className="recurrence-review-item" key={item.id}><input type="checkbox" aria-label={`Confirmar ${item.description}`} checked={selectedRecurrences.includes(item.id)} onChange={event => { const current = new Set(selectedRecurrences); if (event.target.checked) current.add(item.id); else current.delete(item.id); setRecurrenceSelection([...current]) }} /><span className="category-icon" style={{ color: category?.color, background: `${category?.color}18` }}>↻</span><span className="recurrence-info"><b>{item.description}</b><small>{category?.name || 'Sem categoria'} · Todo dia {item.day} · {item.method}</small></span><b className="recurrence-amount">{money(item.amount)}</b><button type="button" className="recurrence-skip" onClick={() => skipRecurrence(item.id)}>Pular</button></div> })}</div><div className="recurrence-review-footer"><span>Os lançamentos confirmados entram na lista do mês.</span><button className="primary" disabled={!selectedRecurrences.length} onClick={confirmRecurrences}>Confirmar {selectedRecurrences.length} {selectedRecurrences.length === 1 ? 'despesa' : 'despesas'}</button></div></> : <div className="empty">Nenhuma cobrança pendente para revisar neste mês.</div>}
+          </div>
+          <div className="panel recurrence-manage"><div className="panel-head"><div><h2>Modelos mensais</h2><p>Gerencie os valores e a frequência das despesas.</p></div><span className="recurrence-count">{recurrences.filter(item => item.active).length} ativas</span></div>{recurrences.length ? <div className="recurrence-list">{recurrences.map(item => { const category = data.categories.find(value => value.id === item.category); return <div className={`recurrence-template ${item.active ? '' : 'is-paused'}`} key={item.id}><span className="category-icon" style={{ color: category?.color, background: `${category?.color}18` }}>↻</span><span className="recurrence-info"><b>{item.description}</b><small>{category?.name || 'Sem categoria'} · Dia {item.day} · {item.active ? 'Ativa' : 'Pausada'}</small></span><b className="recurrence-amount">{money(item.amount)}</b><details className="row-actions"><summary aria-label={`Ações para ${item.description}`} title="Ações">···</summary><div className="row-action-menu"><button onClick={event => closeActionMenu(event, () => openRecurrence(item))}>Editar</button><button onClick={event => closeActionMenu(event, () => save({ ...data, recurrences: recurrences.map(value => value.id === item.id ? { ...value, active: !value.active } : value) }))}>{item.active ? 'Pausar' : 'Reativar'}</button><button className="danger" onClick={event => closeActionMenu(event, () => { if (window.confirm(`Excluir a recorrência “${item.description}”? Os lançamentos já criados serão mantidos.`)) save({ ...data, recurrences: recurrences.filter(value => value.id !== item.id) }) })}>Excluir</button></div></details></div> })}</div> : <div className="empty">Cadastre seu primeiro modelo mensal para revisar cobranças recorrentes aqui.</div>}</div>
         </section> : view === 'Visão geral' ? <>
           <section className="stats health-stats">
             <article className="stat-card balance-card"><div className="stat-top"><span>Gastos pessoais do mês</span><span className="stat-symbol">↘</span></div><strong>{money(total)}</strong><div className="stat-foot">Sua parte em {monthName(month)}</div><div className="sparkline"><svg viewBox="0 0 240 50" preserveAspectRatio="none"><path d="M0 40 C18 37 22 29 37 34 S56 31 67 30 S82 39 97 29 S118 24 129 29 S151 12 162 20 S178 29 187 19 S210 23 219 7 S233 17 240 6" fill="none" stroke="#7be1c4" strokeWidth="2" /></svg></div></article>
@@ -237,7 +249,8 @@ function App() {
       <div className="modal-actions"><button type="button" className="cancel-btn" onClick={closeExpenseModal}>Cancelar</button><button className="primary" type="submit">{editingExpenseId ? 'Salvar alterações' : 'Salvar lançamento'}</button></div>
     </form></div>}
 
-    {settingsModal && <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) setSettingsModal(null) }}><form className="modal settings-modal" onSubmit={saveSetting}><div className="modal-header"><div><span className="eyebrow">AJUSTES</span><h2>{settingsModal.id ? 'Editar' : 'Novo'} {settingsModal.kind === 'category' ? 'categoria' : settingsModal.kind === 'card' ? 'cartão' : 'participante'}</h2></div><button type="button" onClick={() => setSettingsModal(null)}>×</button></div><label>Nome<input required autoFocus maxLength={40} placeholder={settingsModal.kind === 'category' ? 'Ex.: Educação' : settingsModal.kind === 'card' ? 'Ex.: Cartão principal' : 'Ex.: Maria'} value={settingsModal.name} onChange={e => setSettingsModal({ ...settingsModal, name: e.target.value })} /></label>{settingsModal.kind === 'category' ? <label>Cor da categoria<div className="color-picker-row"><input aria-label="Cor da categoria" type="color" value={settingsModal.color} onChange={e => setSettingsModal({ ...settingsModal, color: e.target.value })} /><span>Escolha uma cor para identificar esta categoria.</span></div></label> : settingsModal.kind === 'card' ? <div className="form-row"><label>Dia de fechamento<input required type="number" min="1" max="31" value={settingsModal.closingDay} onChange={e => setSettingsModal({ ...settingsModal, closingDay: e.target.value })} /><small className="form-help">Compras a partir deste dia vão para o próximo ciclo.</small></label><label>Dia de vencimento<input required type="number" min="1" max="31" value={settingsModal.dueDay} onChange={e => setSettingsModal({ ...settingsModal, dueDay: e.target.value })} /></label></div> : <p className="form-help participant-modal-help">Os valores atribuídos a esta pessoa ficarão associados aos lançamentos correspondentes e serão salvos apenas neste dispositivo.</p>}<div className="modal-actions"><button type="button" className="cancel-btn" onClick={() => setSettingsModal(null)}>Cancelar</button><button className="primary" type="submit">{settingsModal.id ? 'Salvar alterações' : 'Adicionar'}</button></div></form></div>}
+    {recurrenceEditor && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setRecurrenceEditor(null) }}><form className="modal recurrence-modal" onSubmit={saveRecurrence}><div className="modal-header"><div><span className="eyebrow">DESPESA MENSAL</span><h2>{recurrenceEditor.id ? 'Editar recorrência' : 'Nova recorrência'}</h2></div><button type="button" onClick={() => setRecurrenceEditor(null)}>×</button></div><label>Descrição<input required autoFocus maxLength={70} placeholder="Ex.: Internet, academia..." value={recurrenceEditor.description} onChange={event => setRecurrenceEditor({ ...recurrenceEditor, description: event.target.value })} /></label><div className="form-row"><label>Valor mensal<input required type="number" min="0.01" step="0.01" value={recurrenceEditor.amount} onChange={event => setRecurrenceEditor({ ...recurrenceEditor, amount: event.target.value })} /></label><label>Dia da cobrança<input required type="number" min="1" max="31" value={recurrenceEditor.day} onChange={event => setRecurrenceEditor({ ...recurrenceEditor, day: event.target.value })} /></label></div><div className="form-row"><label>Categoria<select required value={recurrenceEditor.category} onChange={event => setRecurrenceEditor({ ...recurrenceEditor, category: event.target.value })}>{data.categories.map(category => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label><label>Pagamento<select value={recurrenceEditor.method} onChange={event => setRecurrenceEditor({ ...recurrenceEditor, method: event.target.value as Method })}><option>PIX</option><option>Débito</option>{data.cards.length > 0 && <option>Crédito à vista</option>}</select></label></div>{recurrenceEditor.method.startsWith('Crédito') && <label>Cartão<select required value={recurrenceEditor.cardId} onChange={event => setRecurrenceEditor({ ...recurrenceEditor, cardId: event.target.value })}>{data.cards.map(card => <option key={card.id} value={card.id}>{card.name}</option>)}</select></label>}<p className="form-help">A recorrência só vira lançamento quando você confirma na revisão mensal. Você pode pular uma cobrança ou pausar o modelo.</p><div className="modal-actions"><button type="button" className="cancel-btn" onClick={() => setRecurrenceEditor(null)}>Cancelar</button><button className="primary" type="submit">{recurrenceEditor.id ? 'Salvar alterações' : 'Criar modelo'}</button></div></form></div>}
+    {settingsModal && <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) closeSettingsModal() }}><form className="modal settings-modal" onSubmit={saveSetting}><div className="modal-header"><div><span className="eyebrow">AJUSTES</span><h2>{settingsModal.id ? 'Editar' : 'Novo'} {settingsModal.kind === 'category' ? 'categoria' : settingsModal.kind === 'card' ? 'cartão' : 'participante'}</h2></div><button type="button" onClick={closeSettingsModal}>×</button></div><label>Nome<input required autoFocus maxLength={40} placeholder={settingsModal.kind === 'category' ? 'Ex.: Educação' : settingsModal.kind === 'card' ? 'Ex.: Cartão principal' : 'Ex.: Maria'} value={settingsModal.name} onChange={e => setSettingsModal({ ...settingsModal, name: e.target.value })} /></label>{settingsModal.kind === 'category' ? <label>Cor da categoria<div className="color-picker-row"><input aria-label="Cor da categoria" type="color" value={settingsModal.color} onChange={e => setSettingsModal({ ...settingsModal, color: e.target.value })} /><span>Escolha uma cor para identificar esta categoria.</span></div></label> : settingsModal.kind === 'card' ? <div className="form-row"><label>Dia de fechamento<input required type="number" min="1" max="31" value={settingsModal.closingDay} onChange={e => setSettingsModal({ ...settingsModal, closingDay: e.target.value })} /><small className="form-help">Compras a partir deste dia vão para o próximo ciclo.</small></label><label>Dia de vencimento<input required type="number" min="1" max="31" value={settingsModal.dueDay} onChange={e => setSettingsModal({ ...settingsModal, dueDay: e.target.value })} /></label></div> : <p className="form-help participant-modal-help">Os valores atribuídos a esta pessoa ficarão associados aos lançamentos correspondentes e serão salvos apenas neste dispositivo.</p>}<div className="modal-actions"><button type="button" className="cancel-btn" onClick={closeSettingsModal}>Cancelar</button><button className="primary" type="submit">{settingsModal.id ? 'Salvar alterações' : 'Adicionar'}</button></div></form></div>}
   </div>
 }
 

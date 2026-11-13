@@ -13,12 +13,21 @@ O Node.js e as dependências deste projeto já estão instalados nesta pasta.
 
 ## Recursos
 
+- Modelos de despesas recorrentes mensais com revisão por mês; cada cobrança só entra nos lançamentos depois de confirmada, e pode ser pulada ou pausada.
+- Tema escuro alternável, com preferência guardada neste navegador.
+
 - Cadastro de lançamentos por PIX, débito, crédito à vista e crédito parcelado.
 - Parcelas distribuídas nos meses seguintes, com arredondamento em centavos.
 - Cartões configuráveis com dia de fechamento e vencimento. O sistema prevê o mês de vencimento da fatura; compras no fechamento ou depois vão para o próximo ciclo.
 - Categorias, visão mensal, busca, filtros, resumo por categoria e exportação CSV.
 - Participantes para dividir despesas, com atribuição por lançamento ou parcela e resumo local de valores a receber.
-- Dados locais no navegador; não há conta ou servidor.
+- Backup completo em JSON para exportar e restaurar categorias, cartões, participantes e lançamentos. A importação substitui os dados atuais após confirmação.
+- Dados locais no navegador; não há conta ou servidor. A validação dos dados salvos e dos backups evita carregar registros com estrutura inválida.
+- Exportação CSV com proteção contra fórmulas em campos preenchidos pelo usuário.
+
+## Testes
+
+Execute `npm test` com Node.js 22.6 ou mais recente para verificar o cálculo de faturas e parcelas, validação/restauração de backups e proteção do CSV.
 
 ## Hospedar no GitHub Pages
 
