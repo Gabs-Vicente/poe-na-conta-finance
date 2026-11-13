@@ -401,11 +401,17 @@ footer{color:#89877f}
   .table-foot{flex-direction:column;align-items:flex-start;gap:6px;padding:12px 14px;font-size:10px}
   .recurrence-review-item>input{width:19px;height:19px}
   .recurrence-info small{max-width:none}
-  .modal-backdrop{align-items:flex-end;padding:0}
-  .modal,.onboarding-modal,.expense-modal{width:100%;max-width:100%;max-height:92dvh;border-radius:22px 22px 0 0;padding:22px 18px calc(22px + env(safe-area-inset-bottom))}
+  .modal-backdrop{top:var(--vvt,0px);height:var(--vvh,100dvh);bottom:auto;align-items:flex-end;padding:0}
+  .modal,.onboarding-modal,.expense-modal{width:100%;max-width:100%;max-height:min(92dvh,calc(var(--vvh,100dvh) - 8px));border-radius:22px 22px 0 0;padding:20px 18px calc(20px + env(safe-area-inset-bottom));-webkit-overflow-scrolling:touch;touch-action:pan-y}
+  html[data-keyboard="open"] .modal-backdrop{align-items:flex-start;padding-top:6px}
+  html[data-keyboard="open"] .modal,html[data-keyboard="open"] .onboarding-modal,html[data-keyboard="open"] .expense-modal{max-height:calc(var(--vvh,100dvh) - 6px);border-radius:18px 18px 0 0;padding-top:16px;padding-bottom:16px}
   .modal-actions{gap:10px}
   .modal-actions button{flex:1;min-height:44px;font-size:12px;justify-content:center}
   .backup-actions button,.profile-photo-actions button{min-height:40px;font-size:11px;padding:9px 14px}
+}
+@media(max-width:760px){
+  html[data-keyboard="open"] .site-header nav{display:none}
+  html[data-keyboard="open"] .content{padding-bottom:24px}
 }
 .data-page-table th.col-select,.data-page-table td.col-select{width:38px;padding-left:18px;padding-right:4px;text-align:center;vertical-align:middle}
 .data-page-table th.col-desc,.data-page-table td.col-desc{padding-left:8px}
