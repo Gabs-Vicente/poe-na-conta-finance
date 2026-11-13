@@ -519,3 +519,76 @@ footer{color:#89877f}
 @media(max-width:520px){
   .confirm-dialog-modal{width:100%;max-width:100%}
 }
+.pwa-install-banner,.backup-reminder-banner{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;margin:14px 0 6px;padding:13px 16px;border:1px solid #dce6de;border-radius:16px;background:#f4f8f5;animation:nexus-card-in .24s cubic-bezier(.2,.75,.25,1) both}
+.backup-reminder-banner{border-color:#e6dec8;background:#fbf8ef}
+.pwa-install-banner-info,.backup-reminder-info{display:flex;align-items:center;gap:12px;flex:1;min-width:220px}
+.pwa-install-icon,.backup-reminder-icon{width:34px;height:34px;flex:0 0 34px;border-radius:10px;display:grid;place-items:center;background:#e3efe7;color:#1d674d;font-size:16px;font-weight:700}
+.backup-reminder-icon{background:#f2ead5;color:#826023}
+.pwa-install-banner-info b,.backup-reminder-info b{display:block;font-size:11px;font-weight:700;color:#1d2821}
+.backup-reminder-info b{color:#352c1a}
+.pwa-install-banner-info span,.backup-reminder-info span{display:block;margin-top:2px;font-size:10px;line-height:1.45;color:#5b6960}
+.backup-reminder-info span{color:#6f644b}
+.pwa-install-banner-actions,.backup-reminder-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.app-shell[data-theme="dark"] .pwa-install-banner{border-color:#3a453b;background:#222821}
+.app-shell[data-theme="dark"] .pwa-install-icon{background:#303b30;color:#9fd4b1}
+.app-shell[data-theme="dark"] .pwa-install-banner-info b{color:#eef2ee}
+.app-shell[data-theme="dark"] .pwa-install-banner-info span{color:#b6c0b7}
+.app-shell[data-theme="dark"] .backup-reminder-banner{border-color:#52462d;background:#29251c}
+.app-shell[data-theme="dark"] .backup-reminder-icon{background:#3b3424;color:#e5c37c}
+.app-shell[data-theme="dark"] .backup-reminder-info b{color:#f2ead9}
+.app-shell[data-theme="dark"] .backup-reminder-info span{color:#c9bfa8}
+.pwa-preferences{border-top:1px solid #eeede8;margin-top:17px;padding-top:15px}
+.pwa-preferences h3{margin:0;color:#41443c;font:700 11px Manrope,sans-serif}
+.pwa-preferences>p{margin:5px 0 11px;color:#85887e;font-size:9px;line-height:1.5}
+.pwa-status-badge{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border-radius:20px;background:#eaf4ef;color:#226e54;font-size:9px;font-weight:700}
+.app-shell[data-theme="dark"] .pwa-preferences{border-color:#393a33}
+.app-shell[data-theme="dark"] .pwa-preferences h3{color:#e7e5dc}
+.app-shell[data-theme="dark"] .pwa-preferences>p{color:#b0afa5}
+.app-shell[data-theme="dark"] .pwa-status-badge{background:#2b362d;color:#a5d6b5}
+.pwa-guide-modal{width:min(100%,460px)}
+.pwa-guide-steps{display:grid;gap:10px;margin:12px 0 4px}
+.pwa-guide-card{padding:12px 14px;border:1px solid #e6e4dd;border-radius:12px;background:#faf9f5}
+.pwa-guide-card b{display:block;font-size:11px;color:#22241f;margin-bottom:6px}
+.pwa-guide-card ol{margin:0;padding-left:18px;display:grid;gap:5px;font-size:10px;line-height:1.45;color:#5b5d54}
+.pwa-guide-card ol b{display:inline;font-size:inherit;margin:0}
+.app-shell[data-theme="dark"] .pwa-guide-card{border-color:#393a33;background:#262721}
+.app-shell[data-theme="dark"] .pwa-guide-card b{color:#efeee7}
+.app-shell[data-theme="dark"] .pwa-guide-card ol{color:#b9b8ae}
+.backup-status-row{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:10px 13px;margin:0 0 12px;border:1px solid #e6e5de;border-radius:11px;background:#faf9f5;font-size:10px;font-weight:600;color:#474941}
+.backup-status-row small{font-size:9px;font-weight:500;color:#7d7f75}
+.app-shell[data-theme="dark"] .backup-status-row{border-color:#393a33;background:#252620;color:#dedcd2}
+.app-shell[data-theme="dark"] .backup-status-row small{color:#a8a79d}
+.data-page-table .filters{flex-wrap:wrap;gap:9px}
+.data-page-table .filters .search{flex:1 1 220px;max-width:none}
+.data-page-table .filters select{flex:0 1 auto;min-width:148px;max-width:none}
+.filter-clear-btn{height:37px;padding:0 13px;font-size:10px;font-weight:600;white-space:nowrap}
+.cards-summary-panel{grid-column:1/-1;min-height:0!important}
+.cards-summary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin-top:14px}
+.card-summary-item{padding:14px 16px;border:1px solid #e8e7e0;border-radius:15px;background:#faf9f5;display:flex;flex-direction:column;gap:11px}
+.card-summary-top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+.card-summary-title{display:flex;align-items:center;gap:9px;min-width:0}
+.card-summary-title .card-icon{width:30px;height:30px;flex:0 0 30px;border-radius:9px;display:grid;place-items:center;background:#ecebe4;color:#2f312b;font-size:14px}
+.card-summary-title b{display:block;font-size:11px;color:#20211d;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.card-summary-title small{display:block;margin-top:2px;font-size:9px;color:#828178}
+.card-summary-link{white-space:nowrap;font-size:9px;padding:4px 0}
+.card-summary-amount{display:flex;align-items:baseline;justify-content:space-between;gap:10px;padding-top:8px;border-top:1px solid #ecebe4}
+.card-summary-amount span{font-size:9px;color:#7c7b72}
+.card-summary-amount strong{font:700 18px/1.1 Manrope,sans-serif;letter-spacing:-.5px;color:#191a18}
+.card-summary-breakdown{display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:9px;color:#6c6b63}
+.card-summary-breakdown b{color:#292a25;font-weight:700}
+.app-shell[data-theme="dark"] .card-summary-item{border-color:#383a32;background:#262721}
+.app-shell[data-theme="dark"] .card-summary-title .card-icon{background:#34362e;color:#dcdad0}
+.app-shell[data-theme="dark"] .card-summary-title b{color:#f0eee5}
+.app-shell[data-theme="dark"] .card-summary-title small{color:#a4a399}
+.app-shell[data-theme="dark"] .card-summary-amount{border-color:#35372f}
+.app-shell[data-theme="dark"] .card-summary-amount span{color:#a8a79d}
+.app-shell[data-theme="dark"] .card-summary-amount strong{color:#f0eee5}
+.app-shell[data-theme="dark"] .card-summary-breakdown{color:#b2b1a7}
+.app-shell[data-theme="dark"] .card-summary-breakdown b{color:#e7e5dc}
+@media(max-width:760px){
+  .pwa-install-banner,.backup-reminder-banner{padding:12px 14px}
+  .pwa-install-banner-actions,.backup-reminder-actions{width:100%}
+  .pwa-install-banner-actions button,.backup-reminder-actions button{flex:1;justify-content:center;min-height:38px}
+  .data-page-table .filters select{flex:1 1 calc(50% - 6px);min-width:130px}
+  .filter-clear-btn{flex:1 1 100%;min-height:38px}
+}

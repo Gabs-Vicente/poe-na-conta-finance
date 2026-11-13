@@ -6,9 +6,10 @@ type ExpenseForm = { description: string; amount: string; date: string; category
 type SettingEditor = { kind: 'category' | 'card' | 'participant'; id?: string; name: string; color: string; closingDay: string; dueDay: string }
 type RecurrenceEditor = { id?: string; description: string; amount: string; category: string; method: Method; cardId: string; day: string }
 type MainView = 'Visão geral' | 'Lançamentos' | 'Relatórios' | 'Recorrências' | 'Ajustes'
-type ModalKind = 'expense' | 'recurrence' | 'settings' | 'backup' | 'easter-egg' | 'onboarding' | 'reset' | 'confirm'
+type ModalKind = 'expense' | 'recurrence' | 'settings' | 'backup' | 'easter-egg' | 'onboarding' | 'reset' | 'confirm' | 'pwa-guide'
 type OnboardingStartMode = 'empty' | 'demo' | 'keep'
 type ConfirmDialog = { eyebrow: string; title: string; description: string; confirmLabel: string; onConfirm: () => void }
+type BeforeInstallPromptEvent = Event & { prompt: () => Promise<void>; userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }> }
 
 const MODAL_CLOSE_DURATION_MS = 220
 const TOAST_AUTO_DISMISS_MS = 3800
@@ -112,6 +113,16 @@ function App() {
   const [limitNoticePercent, setLimitNoticePercent] = useState(() => { const saved = Number(localStorage.getItem('poe-na-conta-limit-notice-percent')); return Number.isInteger(saved) && saved >= 1 && saved <= 100 ? String(saved) : '80' })
   const [query, setQuery] = useState('')
   const [categoryFilter, setCategoryFilter] = useState('Todas as categorias')
+  const [methodFilter, setMethodFilter] = useState('Todos os pagamentos')
+  const [cardFilter, setCardFilter] = useState('Todos os cartões')
+  const [deferredInstallPrompt, setDeferredInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null)
+  const [isStandalone, setIsStandalone] = useState(() => typeof window !== 'undefined' && (window.matchMedia?.('(display-mode: standalone)').matches || (window.navigator as Navigator & { standalone?: boolean }).standalone === true))
+  const [pwaBannerDismissed, setPwaBannerDismissed] = useState(() => localStorage.getItem('poe-na-conta-pwa-dismissed') === '1')
+  const [pwaGuideOpen, setPwaGuideOpen] = useState(false)
+  const [lastBackupAt, setLastBackupAt] = useState(() => localStorage.getItem('poe-na-conta-last-backup-at') || '')
+  const [changesSinceBackup, setChangesSinceBackup] = useState(() => Number(localStorage.getItem('poe-na-conta-changes-since-backup') || '0'))
+  const [backupSnoozeUntil, setBackupSnoozeUntil] = useState(() => Number(localStorage.getItem('poe-na-conta-backup-snooze-until') || '0'))
+  const [nowTimestamp] = useState(() => Date.now())
   const [trendYear, setTrendYear] = useState(String(today.getFullYear()))
   const [categoryPanelMode, setCategoryPanelMode] = useState<'categories' | 'transactions'>('categories')
   const [hoveredCategoryId, setHoveredCategoryId] = useState<string | null>(null)
@@ -271,12 +282,63 @@ function App() {
       if (modalCloseTimer.current !== null) window.clearTimeout(modalCloseTimer.current)
     }
   }, [])
+  useEffect(() => {
+    const onBeforeInstallPrompt = (event: Event) => {
+      event.preventDefault()
+      setDeferredInstallPrompt(event as BeforeInstallPromptEvent)
+    }
+    const onAppInstalled = () => {
+      setIsStandalone(true)
+      setDeferredInstallPrompt(null)
+      setPwaGuideOpen(false)
+      showToast('Põe na Conta instalado na sua tela inicial!')
+    }
+    window.addEventListener('beforeinstallprompt', onBeforeInstallPrompt)
+    window.addEventListener('appinstalled', onAppInstalled)
+    return () => {
+      window.removeEventListener('beforeinstallprompt', onBeforeInstallPrompt)
+      window.removeEventListener('appinstalled', onAppInstalled)
+    }
+  }, [])
+  const closePwaGuideModal = () => closeModalWithAnimation('pwa-guide', () => setPwaGuideOpen(false))
+  const handleInstallPwa = async () => {
+    if (deferredInstallPrompt) {
+      await deferredInstallPrompt.prompt()
+      const choice = await deferredInstallPrompt.userChoice
+      if (choice.outcome === 'accepted') {
+        setDeferredInstallPrompt(null)
+        setIsStandalone(true)
+      }
+      return
+    }
+    setPwaGuideOpen(true)
+  }
+  const dismissPwaBanner = () => {
+    setPwaBannerDismissed(true)
+    localStorage.setItem('poe-na-conta-pwa-dismissed', '1')
+  }
+  const recordBackupCompleted = () => {
+    const iso = new Date().toISOString()
+    setLastBackupAt(iso)
+    setChangesSinceBackup(0)
+    setBackupSnoozeUntil(0)
+    localStorage.setItem('poe-na-conta-last-backup-at', iso)
+    localStorage.setItem('poe-na-conta-changes-since-backup', '0')
+    localStorage.removeItem('poe-na-conta-backup-snooze-until')
+  }
+  const snoozeBackupReminder = () => {
+    const until = Date.now() + 7 * 24 * 60 * 60 * 1000
+    setBackupSnoozeUntil(until)
+    setChangesSinceBackup(0)
+    localStorage.setItem('poe-na-conta-backup-snooze-until', String(until))
+    localStorage.setItem('poe-na-conta-changes-since-backup', '0')
+  }
   const closeSettingsModal = () => closeModalWithAnimation('settings', () => {
     setSettingsModal(null)
     setSettingsErrors({})
     if (returnToExpenseAfterParticipant) { setReturnToExpenseAfterParticipant(false); setModal(true) }
   })
-  const save = (next: Data, recoveringStorage = false): boolean => {
+  const save = (next: Data, recoveringStorage = false, trackChange = true): boolean => {
     if (storageWarning && !recoveringStorage) {
       showToast('Importe um backup válido ou desbloqueie o armazenamento no aviso acima antes de salvar.')
       return false
@@ -285,6 +347,13 @@ function App() {
       localStorage.setItem('conta-clara-v1', JSON.stringify(next))
       setData(next)
       setStorageWarning('')
+      if (trackChange) {
+        setChangesSinceBackup(prev => {
+          const updated = prev + 1
+          localStorage.setItem('poe-na-conta-changes-since-backup', String(updated))
+          return updated
+        })
+      }
       return true
     } catch {
       showToast('Não foi possível salvar no navegador. Verifique o espaço disponível ou as permissões de armazenamento.')
@@ -296,7 +365,30 @@ function App() {
   const currentExpenses = current
   const personalValue = (e: typeof occurrences[number]) => Math.max(0, e.value - e.allocatedShares.reduce((sum, share) => sum + share.amount, 0))
   const owedBy = (e: typeof occurrences[number]) => { const shares = e.allocatedShares.filter(share => share.amount > 0); const names = shares.map(share => data.participants?.find(participant => participant.id === share.participantId)?.name).filter((name): name is string => Boolean(name)); const amount = shares.reduce((sum, share) => sum + share.amount, 0); return amount ? `${names.length ? names.join(', ') : 'Participante'} ${names.length === 1 ? 'deve' : 'devem'} ${money(amount)}` : '' }
-  const filtered = current.filter(e => e.description.toLowerCase().includes(query.toLowerCase()) && (categoryFilter === 'Todas as categorias' || e.category === categoryFilter))
+  const filtered = current.filter(e => {
+    if (!e.description.toLowerCase().includes(query.toLowerCase())) return false
+    if (categoryFilter !== 'Todas as categorias' && e.category !== categoryFilter) return false
+    if (methodFilter === 'Crédito (todos)') {
+      if (!e.method.startsWith('Crédito')) return false
+    } else if (methodFilter !== 'Todos os pagamentos' && e.method !== methodFilter) {
+      return false
+    }
+    if (cardFilter !== 'Todos os cartões') {
+      const resolvedCardId = e.method.startsWith('Crédito') ? (e.cardId || data.cards[0]?.id || '') : ''
+      if (resolvedCardId !== cardFilter) return false
+    }
+    return true
+  })
+  const hasActiveFilters = Boolean(query.trim()) || categoryFilter !== 'Todas as categorias' || methodFilter !== 'Todos os pagamentos' || cardFilter !== 'Todos os cartões'
+  const clearAllFilters = () => {
+    setQuery('')
+    setCategoryFilter('Todas as categorias')
+    setMethodFilter('Todos os pagamentos')
+    setCardFilter('Todos os cartões')
+  }
+  const filteredPersonalTotal = filtered.reduce((sum, e) => sum + personalValue(e), 0)
+  const filteredReimbursementTotal = filtered.reduce((sum, e) => sum + e.allocatedShares.reduce((s, sh) => s + sh.amount, 0), 0)
+  const filteredInvoiceTotal = filtered.reduce((sum, e) => sum + e.value, 0)
   const filteredExpenseIds = Array.from(new Set(filtered.map(e => e.id)))
   const selectedVisibleIds = filteredExpenseIds.filter(id => selectedExpenseIds.includes(id))
   const allVisibleSelected = filteredExpenseIds.length > 0 && selectedVisibleIds.length === filteredExpenseIds.length
@@ -309,6 +401,33 @@ function App() {
   const categoryTotals = data.categories.map(c => ({ ...c, total: currentExpenses.filter(e => e.category === c.id).reduce((s, e) => s + personalValue(e), 0) })).filter(c => c.total > 0).sort((a, b) => b.total - a.total)
   const reimbursementByParticipant = (data.participants || []).map(participant => ({ participant, current: currentExpenses.reduce((sum, e) => sum + e.allocatedShares.filter(s => s.participantId === participant.id).reduce((a, s) => a + s.amount, 0), 0), future: occurrences.filter(e => e.month > month).reduce((sum, e) => sum + e.allocatedShares.filter(s => s.participantId === participant.id).reduce((a, s) => a + s.amount, 0), 0) })).filter(x => x.current > 0 || x.future > 0)
   const nextMonths = Array.from({ length: 5 }, (_, i) => shiftMonthKey(month, i))
+  const nextMonthKey = shiftMonthKey(month, 1)
+  const cardSummaries = data.cards.map(card => {
+    const cardOccurrences = currentExpenses.filter(e => e.method.startsWith('Crédito') && (e.cardId || data.cards[0]?.id) === card.id)
+    const nextCardOccurrences = occurrences.filter(e => e.month === nextMonthKey && e.method.startsWith('Crédito') && (e.cardId || data.cards[0]?.id) === card.id)
+    const invoiceTotal = cardOccurrences.reduce((sum, e) => sum + e.value, 0)
+    const personalPart = cardOccurrences.reduce((sum, e) => sum + personalValue(e), 0)
+    const sharedPart = cardOccurrences.reduce((sum, e) => sum + e.allocatedShares.reduce((s, sh) => s + sh.amount, 0), 0)
+    const nextInvoiceTotal = nextCardOccurrences.reduce((sum, e) => sum + e.value, 0)
+    return { card, invoiceTotal, personalPart, sharedPart, count: cardOccurrences.length, nextInvoiceTotal }
+  })
+  const openCardTransactions = (cardId: string) => {
+    setQuery('')
+    setCategoryFilter('Todas as categorias')
+    setMethodFilter('Crédito (todos)')
+    setCardFilter(cardId)
+    setView('Lançamentos')
+  }
+  const daysSinceBackup = lastBackupAt ? Math.max(0, Math.floor((nowTimestamp - new Date(lastBackupAt).getTime()) / 86400000)) : null
+  const backupReminderMessage = !storageWarning && !onboardingOpen && data.expenses.length > 0 && nowTimestamp >= backupSnoozeUntil
+    ? !lastBackupAt && changesSinceBackup >= 3
+      ? 'Você já registrou novos lançamentos e ainda não baixou um backup de segurança neste dispositivo.'
+      : daysSinceBackup !== null && daysSinceBackup >= 15
+        ? `Faz ${daysSinceBackup} dias desde o seu último backup. Baixe uma cópia atualizada para proteger seus dados.`
+        : changesSinceBackup >= 5
+          ? `Você fez ${changesSinceBackup} alterações desde o último backup. Que tal baixar uma cópia atualizada?`
+          : ''
+    : ''
   const previousMonth = shiftMonthKey(month, -1)
   const previousTotal = occurrences.filter(e => e.month === previousMonth).reduce((s, e) => s + personalValue(e), 0)
   const monthChange = previousTotal ? ((total - previousTotal) / previousTotal) * 100 : null
@@ -544,10 +663,12 @@ function App() {
     if (storageWarning) { showToast('Importe um backup válido antes de baixar uma cópia dos dados.'); return }
     const blob = new Blob([createBackup(data, { monthlyLimit, limitNoticePercent: String(limitNoticePercentValue), defaultView, theme, profileName, profilePhoto })], { type: 'application/json;charset=utf-8' })
     const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `poe-na-conta-backup-${new Date().toISOString().slice(0, 10)}.json`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000)
+    recordBackupCompleted()
     showToast('Backup baixado. Guarde o arquivo em um local seguro.')
   }
   const applyBackupPayload = (payload: BackupPayload) => {
-    save(payload.data, true)
+    save(payload.data, true, false)
+    recordBackupCompleted()
     if (payload.preferences) {
       const { monthlyLimit: importedLimit, limitNoticePercent: importedPercent, defaultView: importedView, theme: importedTheme } = payload.preferences
       setMonthlyLimit(importedLimit)
@@ -595,11 +716,11 @@ function App() {
     event.preventDefault()
     updateProfileName(profileName.trim())
     if (onboardingStartMode === 'empty') {
-      save({ ...structuredClone(seed), expenses: [], recurrences: [] }, true)
+      save({ ...structuredClone(seed), expenses: [], recurrences: [] }, true, false)
     } else if (onboardingStartMode === 'demo') {
-      save(structuredClone(seed), true)
+      save(structuredClone(seed), true, false)
     } else if (!localStorage.getItem('conta-clara-v1')) {
-      save(data, true)
+      save(data, true, false)
     }
     setHasExistingData(true)
     localStorage.setItem('poe-na-conta-onboarded', '1')
@@ -630,6 +751,9 @@ function App() {
       'poe-na-conta-profile-photo',
       'poe-na-conta-monthly-limit',
       'poe-na-conta-limit-notice-percent',
+      'poe-na-conta-last-backup-at',
+      'poe-na-conta-changes-since-backup',
+      'poe-na-conta-backup-snooze-until',
       'nexus-default-view',
       'nexus-theme',
     ]
@@ -643,12 +767,17 @@ function App() {
     setProfileMessage('')
     setMonthlyLimit('')
     setLimitNoticePercent('80')
+    setLastBackupAt('')
+    setChangesSinceBackup(0)
+    setBackupSnoozeUntil(0)
     setDefaultView('Visão geral')
     setView('Visão geral')
     setSelectedExpenseIds([])
     setRecurrenceSelection(null)
     setQuery('')
     setCategoryFilter('Todas as categorias')
+    setMethodFilter('Todos os pagamentos')
+    setCardFilter('Todos os cartões')
     setOnboardingStartMode('empty')
     setBackupMessage('')
     closeModalWithAnimation('reset', () => {
@@ -705,9 +834,15 @@ function App() {
   }
 
   const transactionTable = <section className="panel transactions data-page-table">
-    <div className="panel-head"><div><h2>{view === 'Relatórios' ? 'Relatório de despesas' : 'Todos os lançamentos'}</h2><p>{view === 'Relatórios' ? 'Gastos pessoais e valores atribuídos a participantes.' : 'Consulte, filtre e acompanhe suas despesas.'}</p></div><button className="export-btn" aria-label="Exportar CSV" onClick={downloadCsv}>↓ <span>Exportar CSV</span></button></div>
-    <div className="data-summary"><div><span>Gastos pessoais</span><b>{money(total)}</b></div><div><span>A receber</span><b>{money(reimbursementTotal)}</b></div><div><span>Lançamentos</span><b>{current.length}</b></div></div>
-    <div className="filters"><label className="search"><span>⌕</span><input aria-label="Buscar lançamentos" placeholder="Buscar lançamento..." value={query} onChange={e => setQuery(e.target.value)} /></label><select aria-label="Filtrar por categoria" value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)}><option>Todas as categorias</option>{data.categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+    <div className="panel-head"><div><h2>{view === 'Relatórios' ? 'Relatório de despesas' : 'Todos os lançamentos'}</h2><p>{view === 'Relatórios' ? 'Gastos pessoais e valores atribuídos a participantes.' : 'Consulte, filtre por categoria, forma de pagamento ou cartão.'}</p></div><button className="export-btn" aria-label="Exportar CSV" onClick={downloadCsv}>↓ <span>Exportar CSV</span></button></div>
+    <div className="data-summary"><div><span>Gastos pessoais{hasActiveFilters ? ' (filtro)' : ''}</span><b>{money(hasActiveFilters ? filteredPersonalTotal : total)}</b></div><div><span>A receber{hasActiveFilters ? ' (filtro)' : ''}</span><b>{money(hasActiveFilters ? filteredReimbursementTotal : reimbursementTotal)}</b></div>{(cardFilter !== 'Todos os cartões' || methodFilter.startsWith('Crédito')) && <div><span>Total na fatura</span><b>{money(filteredInvoiceTotal)}</b></div>}<div><span>Lançamentos</span><b>{hasActiveFilters ? `${filtered.length} de ${current.length}` : current.length}</b></div></div>
+    <div className="filters">
+      <label className="search"><span>⌕</span><input aria-label="Buscar lançamentos" placeholder="Buscar lançamento..." value={query} onChange={e => setQuery(e.target.value)} /></label>
+      <select aria-label="Filtrar por categoria" value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)}><option>Todas as categorias</option>{data.categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
+      <select aria-label="Filtrar por forma de pagamento" value={methodFilter} onChange={e => { const next = e.target.value; setMethodFilter(next); if (next === 'PIX' || next === 'Débito') setCardFilter('Todos os cartões') }}><option>Todos os pagamentos</option><option>PIX</option><option>Débito</option><option>Crédito (todos)</option><option>Crédito à vista</option><option>Crédito parcelado</option></select>
+      {data.cards.length > 0 && <select aria-label="Filtrar por cartão" value={cardFilter} onChange={e => { const next = e.target.value; setCardFilter(next); if (next !== 'Todos os cartões' && (methodFilter === 'PIX' || methodFilter === 'Débito')) setMethodFilter('Todos os pagamentos') }}><option>Todos os cartões</option>{data.cards.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select>}
+      {hasActiveFilters && <button type="button" className="cancel-btn filter-clear-btn" onClick={clearAllFilters}>Limpar filtros</button>}
+    </div>
     {selectedVisibleIds.length > 0 && <div className="bulk-actions-bar" role="region" aria-label="Ações em massa">
       <span className="bulk-actions-count"><b>{selectedVisibleIds.length}</b> {selectedVisibleIds.length === 1 ? 'item selecionado' : 'itens selecionados'}</span>
       <div className="bulk-actions-buttons">
@@ -715,8 +850,8 @@ function App() {
         <button type="button" className="danger-btn bulk-delete-btn" onClick={deleteSelectedExpenses}>Excluir selecionados ({selectedVisibleIds.length})</button>
       </div>
     </div>}
-    <div className="table-wrap"><table><thead><tr><th className="col-select"><input type="checkbox" className="row-checkbox" aria-label="Selecionar todos os lançamentos visíveis" checked={allVisibleSelected} disabled={!filteredExpenseIds.length} onChange={e => toggleSelectAllVisible(e.target.checked)} /></th><th className="col-desc">DESCRIÇÃO</th><th className="col-category">CATEGORIA</th><th className="col-date">DATA</th><th className="col-method">PAGAMENTO</th><th className="right col-value">PARTE PESSOAL</th><th className="col-actions" /></tr></thead><tbody>{filtered.map(e => { const cat = data.categories.find(c => c.id === e.category); const own = personalValue(e); const shared = e.allocatedShares.reduce((sum, share) => sum + share.amount, 0); const debtor = owedBy(e); const shortDate = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: 'short' }).format(new Date(`${e.date}T12:00:00`)).replace('.', ''); const isSelected = selectedExpenseIds.includes(e.id); return <tr key={`${e.id}-${e.month}`} className={isSelected ? 'is-selected' : ''}><td className="col-select"><input type="checkbox" className="row-checkbox" aria-label={`Selecionar ${e.description}`} checked={isSelected} onChange={ev => toggleSelectExpense(e.id, ev.target.checked)} /></td><td className="col-desc"><div className="desc"><span className="category-icon" style={{ color: cat?.color, background: `${cat?.color}18` }}>{e.category === 'moradia' ? '⌂' : e.category === 'alimentacao' ? '◒' : e.category === 'transporte' ? '⌁' : e.category === 'lazer' ? '✧' : '＋'}</span><span className="desc-text"><b>{e.description}</b><small>{e.installments > 1 ? `Parcela ${e.part} de ${e.installments}` : 'Despesa'}{shared > 0 ? ` · ${debtor}` : ''}</small><small className="mobile-tx-meta">{shortDate} · {cat?.name || 'Sem categoria'} · {e.method}</small></span></div></td><td className="col-category"><span className="category-label"><i style={{ background: cat?.color }} />{cat?.name || 'Sem categoria'}</span></td><td className="date-cell col-date">{new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' }).format(new Date(`${e.date}T12:00:00`))}</td><td className="col-method"><span className={`method ${e.method.startsWith('Crédito') ? 'credit' : ''}`}>{e.method}</span></td><td className="right value col-value">{money(own)}</td><td className="col-actions"><details className="row-actions"><summary aria-label={`Ações para ${e.description}`} title="Ações">···</summary><div className={`row-action-menu ${theme === 'dark' ? 'is-dark' : 'is-light'}`}><button onClick={event => closeActionMenu(event, () => editExpense(e))}>Editar</button><button className="danger" onClick={event => closeActionMenu(event, () => deleteExpense(e.id))}>Excluir</button></div></details></td></tr> })}</tbody></table>{!filtered.length && <div className="empty">Nenhum lançamento encontrado neste mês.</div>}</div>
-    <div className="table-foot"><span>Mostrando <b>{filtered.length}</b> de <b>{current.length}</b> lançamentos</span><span>Gastos pessoais <b>{money(total)}</b> · A receber <b>{money(reimbursementTotal)}</b></span></div>
+    <div className="table-wrap"><table><thead><tr><th className="col-select"><input type="checkbox" className="row-checkbox" aria-label="Selecionar todos os lançamentos visíveis" checked={allVisibleSelected} disabled={!filteredExpenseIds.length} onChange={e => toggleSelectAllVisible(e.target.checked)} /></th><th className="col-desc">DESCRIÇÃO</th><th className="col-category">CATEGORIA</th><th className="col-date">DATA</th><th className="col-method">PAGAMENTO</th><th className="right col-value">PARTE PESSOAL</th><th className="col-actions" /></tr></thead><tbody>{filtered.map(e => { const cat = data.categories.find(c => c.id === e.category); const txCard = e.method.startsWith('Crédito') ? (data.cards.find(c => c.id === e.cardId) || data.cards[0]) : undefined; const own = personalValue(e); const shared = e.allocatedShares.reduce((sum, share) => sum + share.amount, 0); const debtor = owedBy(e); const shortDate = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: 'short' }).format(new Date(`${e.date}T12:00:00`)).replace('.', ''); const isSelected = selectedExpenseIds.includes(e.id); return <tr key={`${e.id}-${e.month}`} className={isSelected ? 'is-selected' : ''}><td className="col-select"><input type="checkbox" className="row-checkbox" aria-label={`Selecionar ${e.description}`} checked={isSelected} onChange={ev => toggleSelectExpense(e.id, ev.target.checked)} /></td><td className="col-desc"><div className="desc"><span className="category-icon" style={{ color: cat?.color, background: `${cat?.color}18` }}>{e.category === 'moradia' ? '⌂' : e.category === 'alimentacao' ? '◒' : e.category === 'transporte' ? '⌁' : e.category === 'lazer' ? '✧' : '＋'}</span><span className="desc-text"><b>{e.description}</b><small>{e.installments > 1 ? `Parcela ${e.part} de ${e.installments}` : 'Despesa'}{shared > 0 ? ` · ${debtor}` : ''}</small><small className="mobile-tx-meta">{shortDate} · {cat?.name || 'Sem categoria'} · {e.method}{txCard ? ` (${txCard.name})` : ''}</small></span></div></td><td className="col-category"><span className="category-label"><i style={{ background: cat?.color }} />{cat?.name || 'Sem categoria'}</span></td><td className="date-cell col-date">{new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' }).format(new Date(`${e.date}T12:00:00`))}</td><td className="col-method"><span className={`method ${e.method.startsWith('Crédito') ? 'credit' : ''}`}>{e.method}{txCard ? ` · ${txCard.name}` : ''}</span></td><td className="right value col-value">{money(own)}</td><td className="col-actions"><details className="row-actions"><summary aria-label={`Ações para ${e.description}`} title="Ações">···</summary><div className={`row-action-menu ${theme === 'dark' ? 'is-dark' : 'is-light'}`}><button onClick={event => closeActionMenu(event, () => editExpense(e))}>Editar</button><button className="danger" onClick={event => closeActionMenu(event, () => deleteExpense(e.id))}>Excluir</button></div></details></td></tr> })}</tbody></table>{!filtered.length && <div className="empty">Nenhum lançamento encontrado neste mês.</div>}</div>
+    <div className="table-foot"><span>Mostrando <b>{filtered.length}</b> de <b>{current.length}</b> lançamentos</span><span>Gastos pessoais <b>{money(hasActiveFilters ? filteredPersonalTotal : total)}</b> · A receber <b>{money(hasActiveFilters ? filteredReimbursementTotal : reimbursementTotal)}</b></span></div>
   </section>
 
   return <div className="app-shell" data-theme={theme}>
@@ -727,16 +862,42 @@ function App() {
     <main className="main"><header className="topbar"><div className="breadcrumb">Põe na Conta <span>/</span> {view}</div><div className="top-actions"><span className="today">◷ &nbsp;{new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' }).format(today)}</span><div className={`avatar small profile-avatar ${profilePhoto ? 'has-photo' : ''}`}>{profilePhoto ? <img src={profilePhoto} alt="" /> : profileName.trim() ? profileInitials(profileName) : <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></svg>}</div></div></header>
       <div className="content" key={view}>
         <div className="heading-row"><div><div className="eyebrow">{new Intl.DateTimeFormat('pt-BR', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' }).format(today).toLocaleUpperCase('pt-BR')}</div><h1>{view}</h1><p className="subtitle">{view === 'Visão geral' ? 'Uma leitura clara dos seus gastos e compromissos.' : view === 'Lançamentos' ? 'Encontre e acompanhe cada movimentação.' : view === 'Relatórios' ? 'Entenda como seus gastos se distribuem ao longo do tempo.' : view === 'Recorrências' ? 'Revise as despesas que se repetem antes de lançar no mês.' : 'Personalize categorias, cartões e pessoas com quem divide despesas.'}</p></div>{view !== 'Ajustes' && <button className="primary" onClick={() => view === 'Recorrências' ? openRecurrence() : openNewExpenseModal()}><span>＋</span> {view === 'Recorrências' ? 'Nova recorrência' : 'Nova despesa'}</button>}</div>
+        {!isStandalone && !pwaBannerDismissed && !onboardingOpen && (Boolean(deferredInstallPrompt) || isTouchDevice()) && <div className="pwa-install-banner" role="region" aria-label="Instalar aplicativo">
+          <div className="pwa-install-banner-info">
+            <span className="pwa-install-icon" aria-hidden="true">📲</span>
+            <div>
+              <b>Instale o Põe na Conta na sua tela inicial</b>
+              <span>Abra em tela cheia como um app nativo e use 100% offline a qualquer momento.</span>
+            </div>
+          </div>
+          <div className="pwa-install-banner-actions">
+            <button type="button" className="cancel-btn" onClick={dismissPwaBanner}>Agora não</button>
+            <button type="button" className="primary" onClick={handleInstallPwa}>Instalar na tela inicial</button>
+          </div>
+        </div>}
+        {backupReminderMessage && <div className="backup-reminder-banner" role="status">
+          <div className="backup-reminder-info">
+            <span className="backup-reminder-icon" aria-hidden="true">↓</span>
+            <div>
+              <b>Lembrete de backup</b>
+              <span>{backupReminderMessage}</span>
+            </div>
+          </div>
+          <div className="backup-reminder-actions">
+            <button type="button" className="cancel-btn" onClick={snoozeBackupReminder}>Lembrar depois</button>
+            <button type="button" className="outline-btn" onClick={downloadBackup}>↓ Baixar backup agora</button>
+          </div>
+        </div>}
         {storageWarning && <div className="backup-warning" role="alert"><span>{storageWarning} Acesse <b>Ajustes → Seus dados</b> para importar um backup válido.</span><button type="button" className="outline-btn" onClick={() => save(data, true)}>Continuar com os dados atuais</button></div>}
         {view !== 'Ajustes' && <div className="monthbar"><button className="month-arrow" aria-label="Mês anterior" onClick={() => { setMonth(shiftMonthKey(month, -1)); setRecurrenceSelection(null) }}>‹</button><span>{monthName(month)}</span><button className="month-arrow" aria-label="Próximo mês" onClick={() => { setMonth(shiftMonthKey(month, 1)); setRecurrenceSelection(null) }}>›</button><button className="today-btn" onClick={() => { setMonth(monthKey(today)); setRecurrenceSelection(null) }}>Hoje</button></div>}
         {view !== 'Ajustes' && monthlyLimitValue > 0 && <section className={`monthly-limit ${monthlyLimitNotice ? 'is-warning' : ''}`} role="status" aria-live="polite"><div className="monthly-limit-heading"><span>Limite mensal · {monthName(month)}</span><b>{money(total)} de {money(monthlyLimitValue)}</b></div><div className="monthly-limit-track" role="progressbar" aria-label="Uso do limite mensal" aria-valuemin={0} aria-valuemax={monthlyLimitValue} aria-valuenow={Math.min(total, monthlyLimitValue)}><i style={{ width: `${Math.min(monthlyLimitProgress, 100)}%` }} /></div><p>{monthlyLimitNotice ? monthlyLimitProgress > 100 ? `Teto mensal ultrapassado: você já usou ${Math.round(monthlyLimitProgress)}% do seu limite pessoal.` : `Você atingiu ${limitNoticePercentValue}% do limite mensal que definiu.` : `Avisaremos ao atingir ${limitNoticePercentValue}% (${money(monthlyLimitValue * limitNoticePercentValue / 100)}).`}</p></section>}
 
         {view === 'Ajustes' ? <section className="settings-grid">
-          <div className="panel settings-panel preference-panel" id="preferences-panel"><div className="panel-head"><div><h2>Preferências</h2><p>Personalize como o Põe na Conta abre e aparece.</p></div><span className="calendar-icon">⚙</span></div><div className="profile-preferences"><h3>Perfil</h3><p>Defina como seu perfil aparece neste dispositivo.</p><label>Nome<input type="text" maxLength={60} placeholder="Seu nome" value={profileName} onChange={event => updateProfileName(event.target.value)} /></label><div className="profile-photo-actions"><button type="button" className="outline-btn" onClick={() => profilePhotoInput.current?.click()}>{profilePhoto ? 'Trocar foto' : 'Adicionar foto'}</button>{profilePhoto && <button type="button" className="text-btn" onClick={removeProfilePhoto}>Remover foto</button>}</div>{profileMessage && <small className="profile-message" role="status">{profileMessage}</small>}</div><div className="preference-controls"><label>Tela ao abrir<select value={defaultView} onChange={event => updateDefaultView(event.target.value as MainView)}><option>Visão geral</option><option>Lançamentos</option><option>Relatórios</option><option>Recorrências</option><option>Ajustes</option></select></label><label>Tema padrão<select value={defaultTheme} onChange={event => updateDefaultTheme(event.target.value as 'light' | 'dark')}><option value="light">Claro</option><option value="dark">Escuro</option></select></label></div><div className="budget-preferences"><h3>Limite de gastos por mês</h3><p>O limite considera apenas sua parte das despesas; valores de participantes ficam de fora.</p><div className="budget-preference-fields"><label>Teto mensal<div className="money-input-wrap"><span className="money-prefix" aria-hidden="true">R$</span><input type="text" inputMode="decimal" enterKeyHint="done" onKeyDown={dismissKeyboardOnEnter} placeholder="0,00" value={monthlyLimit ? formatMoneyInput(Number(monthlyLimit)) : ''} onChange={event => { const formatted = formatMoneyInput(event.target.value); const parsed = parseMoneyInput(formatted); updateMonthlyLimit(parsed > 0 ? String(parsed) : '') }} /></div></label><label>Avisar ao atingir<div className="money-input-wrap"><input type="text" inputMode="numeric" enterKeyHint="done" onKeyDown={dismissKeyboardOnEnter} placeholder="80" value={limitNoticePercent} onChange={event => updateLimitNoticePercent(event.target.value.replace(/\D/g, '').slice(0, 3))} /><span className="money-suffix" aria-hidden="true">%</span></div></label></div></div></div>
+          <div className="panel settings-panel preference-panel" id="preferences-panel"><div className="panel-head"><div><h2>Preferências</h2><p>Personalize como o Põe na Conta abre e aparece.</p></div><span className="calendar-icon">⚙</span></div><div className="profile-preferences"><h3>Perfil</h3><p>Defina como seu perfil aparece neste dispositivo.</p><label>Nome<input type="text" maxLength={60} placeholder="Seu nome" value={profileName} onChange={event => updateProfileName(event.target.value)} /></label><div className="profile-photo-actions"><button type="button" className="outline-btn" onClick={() => profilePhotoInput.current?.click()}>{profilePhoto ? 'Trocar foto' : 'Adicionar foto'}</button>{profilePhoto && <button type="button" className="text-btn" onClick={removeProfilePhoto}>Remover foto</button>}</div>{profileMessage && <small className="profile-message" role="status">{profileMessage}</small>}</div><div className="preference-controls"><label>Tela ao abrir<select value={defaultView} onChange={event => updateDefaultView(event.target.value as MainView)}><option>Visão geral</option><option>Lançamentos</option><option>Relatórios</option><option>Recorrências</option><option>Ajustes</option></select></label><label>Tema padrão<select value={defaultTheme} onChange={event => updateDefaultTheme(event.target.value as 'light' | 'dark')}><option value="light">Claro</option><option value="dark">Escuro</option></select></label></div><div className="budget-preferences"><h3>Limite de gastos por mês</h3><p>O limite considera apenas sua parte das despesas; valores de participantes ficam de fora.</p><div className="budget-preference-fields"><label>Teto mensal<div className="money-input-wrap"><span className="money-prefix" aria-hidden="true">R$</span><input type="text" inputMode="decimal" enterKeyHint="done" onKeyDown={dismissKeyboardOnEnter} placeholder="0,00" value={monthlyLimit ? formatMoneyInput(Number(monthlyLimit)) : ''} onChange={event => { const formatted = formatMoneyInput(event.target.value); const parsed = parseMoneyInput(formatted); updateMonthlyLimit(parsed > 0 ? String(parsed) : '') }} /></div></label><label>Avisar ao atingir<div className="money-input-wrap"><input type="text" inputMode="numeric" enterKeyHint="done" onKeyDown={dismissKeyboardOnEnter} placeholder="80" value={limitNoticePercent} onChange={event => updateLimitNoticePercent(event.target.value.replace(/\D/g, '').slice(0, 3))} /><span className="money-suffix" aria-hidden="true">%</span></div></label></div></div><div className="pwa-preferences"><h3>Aplicativo neste dispositivo</h3><p>{isStandalone ? 'O Põe na Conta já está instalado em tela cheia e funcionando 100% offline neste dispositivo.' : 'Adicione o ícone à tela inicial do celular ou computador para abrir em tela cheia e usar mesmo sem internet.'}</p>{isStandalone ? <span className="pwa-status-badge">✓ Instalado · Modo tela cheia &amp; 100% offline ativo</span> : <button type="button" className="outline-btn" onClick={handleInstallPwa}>📲 Instalar na tela inicial</button>}</div></div>
           <div className="panel settings-panel"><div className="panel-head"><div><h2>Categorias</h2><p>Organize e identifique seus gastos.</p></div><button className="outline-btn" onClick={() => openCategory()}>＋ Nova categoria</button></div>{data.categories.map(c => <div className="setting-row" key={c.id}><i className="dot" style={{ background: c.color }} /><b>{c.name}</b><details className="row-actions"><summary aria-label={`Ações para a categoria ${c.name}`} title="Ações">···</summary><div className={`row-action-menu ${theme === 'dark' ? 'is-dark' : 'is-light'}`}><button onClick={event => closeActionMenu(event, () => openCategory(c))}>Editar</button><button className="danger" onClick={event => closeActionMenu(event, () => { if (save({ ...data, categories: data.categories.filter(x => x.id !== c.id) })) showToast('Categoria removida.') })}>Remover</button></div></details></div>)}</div>
           <div className="panel settings-panel"><div className="panel-head"><div><h2>Cartões</h2><p>Configure fechamento e vencimento da fatura.</p></div><button className="outline-btn" onClick={() => openCard()}>＋ Novo cartão</button></div>{data.cards.map(c => <div className="setting-row" key={c.id}><span className="card-icon">▣</span><b>{c.name}</b><span className="card-days">Fecha dia {c.closingDay} · Vence dia {c.dueDay}</span><details className="row-actions"><summary aria-label={`Ações para o cartão ${c.name}`} title="Ações">···</summary><div className={`row-action-menu ${theme === 'dark' ? 'is-dark' : 'is-light'}`}><button onClick={event => closeActionMenu(event, () => openCard(c))}>Editar</button><button className="danger" onClick={event => closeActionMenu(event, () => { if (save({ ...data, cards: data.cards.filter(x => x.id !== c.id) })) showToast('Cartão removido.') })}>Remover</button></div></details></div>)}</div>
           <div className="panel settings-panel"><div className="panel-head"><div><h2>Participantes</h2><p>Pessoas que dividem despesas com você.</p></div><button className="outline-btn" onClick={() => openParticipant()}>＋ Novo participante</button></div>{(data.participants || []).length ? (data.participants || []).map(participant => <div className="setting-row" key={participant.id}><span className="participant-avatar">{participant.name.slice(0, 1).toUpperCase()}</span><b>{participant.name}</b><details className="row-actions"><summary aria-label={`Ações para ${participant.name}`} title="Ações">···</summary><div className={`row-action-menu ${theme === 'dark' ? 'is-dark' : 'is-light'}`}><button onClick={event => closeActionMenu(event, () => openParticipant(participant))}>Editar</button><button className="danger" onClick={event => closeActionMenu(event, () => removeParticipant(participant.id))}>Remover</button></div></details></div>) : <div className="empty compact">Adicione pessoas para acompanhar o que elas precisam reembolsar.</div>}</div>
-          <div className="panel backup"><h2>Seus dados</h2><p>Os lançamentos ficam salvos localmente neste navegador. Baixe um backup completo para preservar categorias, cartões, participantes e despesas.</p><div className="backup-actions"><button className="outline-btn" onClick={downloadBackup}>Baixar backup JSON</button><button className="outline-btn" onClick={() => backupInput.current?.click()}>Importar backup</button><button className="outline-btn" onClick={downloadCsv}>↓ Exportar mês em CSV</button><button type="button" className="danger-outline-btn" onClick={openResetDataModal}>Excluir dados</button></div>{storageWarning && <p className="backup-warning" role="alert">{storageWarning}</p>}</div>
+          <div className="panel backup"><h2>Seus dados</h2><p>Os lançamentos ficam salvos localmente neste navegador. Baixe um backup completo para preservar categorias, cartões, participantes e despesas.</p><div className="backup-status-row"><span>{lastBackupAt ? `✓ Último backup: ${new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(lastBackupAt))}` : '⚠ Nenhum backup baixado neste dispositivo ainda'}</span>{lastBackupAt && <small>{changesSinceBackup > 0 ? `${changesSinceBackup} ${changesSinceBackup === 1 ? 'alteração desde então' : 'alterações desde então'}` : 'Tudo atualizado'}</small>}</div><div className="backup-actions"><button className="outline-btn" onClick={downloadBackup}>Baixar backup JSON</button><button className="outline-btn" onClick={() => backupInput.current?.click()}>Importar backup</button><button className="outline-btn" onClick={downloadCsv}>↓ Exportar mês em CSV</button><button type="button" className="danger-outline-btn" onClick={openResetDataModal}>Excluir dados</button></div>{storageWarning && <p className="backup-warning" role="alert">{storageWarning}</p>}</div>
         </section> : view === 'Recorrências' ? <section className="recurrence-page">
           <div className="panel recurrence-review"><div className="panel-head"><div><h2>Revisão de {monthName(month)}</h2><p>Confirme só as cobranças que aconteceram neste mês.</p></div><span className="stat-symbol muted">↻</span></div>
             {pendingRecurrences.length ? <><div className="recurrence-review-tools"><label><input type="checkbox" checked={pendingRecurrences.every(item => selectedRecurrences.includes(item.id))} onChange={event => setRecurrenceSelection(event.target.checked ? pendingRecurrences.map(item => item.id) : [])} /> Selecionar todas</label><span>{pendingRecurrences.length} para revisar</span></div><div className="recurrence-list">{pendingRecurrences.map(item => { const category = data.categories.find(value => value.id === item.category); return <div className="recurrence-review-item" key={item.id}><input type="checkbox" aria-label={`Confirmar ${item.description}`} checked={selectedRecurrences.includes(item.id)} onChange={event => { const current = new Set(selectedRecurrences); if (event.target.checked) current.add(item.id); else current.delete(item.id); setRecurrenceSelection([...current]) }} /><span className="category-icon" style={{ color: category?.color, background: `${category?.color}18` }}>↻</span><span className="recurrence-info"><b>{item.description}</b><small>{category?.name || 'Sem categoria'} · Todo dia {item.day} · {item.method}</small></span><b className="recurrence-amount">{money(item.amount)}</b><button type="button" className="recurrence-skip" onClick={() => skipRecurrence(item.id)}>Pular</button></div> })}</div><div className="recurrence-review-footer"><span>Os lançamentos confirmados entram na lista do mês.</span><button className="primary" disabled={!selectedRecurrences.length} onClick={confirmRecurrences}>Confirmar {selectedRecurrences.length} {selectedRecurrences.length === 1 ? 'despesa' : 'despesas'}</button></div></> : <div className="empty">Nenhuma cobrança pendente para revisar neste mês.</div>}
@@ -756,6 +917,7 @@ function App() {
             <div className="panel health-insight"><div className="panel-head"><div><h2>Leitura do seu mês</h2><p>Indicadores com base nos lançamentos</p></div><span className="calendar-icon">✳</span></div>{categoryTotals.length ? <><div className="insight-number">{categoryTotals[0].name}<small>é sua maior categoria</small></div><p className="insight-copy">Ela representa <b>{total ? Math.round(categoryTotals[0].total / total * 100) : 0}%</b> dos gastos previstos no período.</p><div className="track insight-track"><i style={{ width: `${total ? categoryTotals[0].total / total * 100 : 0}%`, background: categoryTotals[0].color }} /></div><div className="health-callout"><span>↗</span><p>{monthChange === null ? 'Registre seus gastos mês a mês para criar uma comparação.' : monthChange > 0 ? `Os gastos previstos subiram ${Math.abs(monthChange).toFixed(0)}% frente ao mês anterior.` : `Os gastos previstos caíram ${Math.abs(monthChange).toFixed(0)}% frente ao mês anterior.`}</p></div></> : <div className="empty">Adicione lançamentos para ver os indicadores do mês.</div>}</div>
             <div className="panel category-panel"><div className="panel-head"><div><h2>Onde estão os gastos</h2><p>{categoryPanelMode === 'categories' ? 'Distribuição por categoria' : `${currentExpenses.length} despesas pessoais no período`}</p></div><div className="category-head-actions"><div className="category-view-toggle" aria-label="Resumo por categoria ou lançamentos"><button className={categoryPanelMode === 'categories' ? 'selected' : ''} onClick={() => setCategoryPanelMode('categories')}>Categorias</button><button className={categoryPanelMode === 'transactions' ? 'selected' : ''} onClick={() => setCategoryPanelMode('transactions')}>Lançamentos</button></div></div></div>{categoryPanelMode === 'transactions' ? currentExpenses.length ? <div className="category-transaction-list">{[...currentExpenses].sort((a, b) => b.date.localeCompare(a.date)).map(e => { const cat = data.categories.find(c => c.id === e.category); const debtor = owedBy(e); return <div className="category-transaction" key={`${e.id}-${e.month}`}><span className="category-icon" style={{ color: cat?.color, background: `${cat?.color}18` }}>{e.category === 'moradia' ? '⌂' : e.category === 'alimentacao' ? '◒' : e.category === 'transporte' ? '⌁' : e.category === 'lazer' ? '✧' : '＋'}</span><span className="category-transaction-info"><b>{e.description}</b><small>{cat?.name || 'Sem categoria'}{debtor ? ` · ${debtor}` : ''}{e.installments > 1 ? ` · Parcela ${e.part}/${e.installments}` : ''}</small></span><b className="category-transaction-value">{money(personalValue(e))}</b></div> })}</div> : <div className="empty compact">Sem despesas neste mês.</div> : categoryTotals.length ? <div className="pie-layout"><div className="pie-chart"><svg className="pie-svg" viewBox="0 0 100 100" role="img" aria-label="Gastos pessoais por categoria"><circle cx="50" cy="50" r="37" fill="none" stroke="#e8eee9" strokeWidth="18" />{pieSlices.length === 1 ? <circle className="pie-slice" cx="50" cy="50" r="37" fill="none" stroke={pieSlices[0].category.color} strokeWidth="18" tabIndex={0} onMouseEnter={() => setHoveredCategoryId(pieSlices[0].category.id)} onMouseLeave={() => setHoveredCategoryId(null)} onFocus={() => setHoveredCategoryId(pieSlices[0].category.id)} onBlur={() => setHoveredCategoryId(null)}><title>{`${pieSlices[0].category.name}: ${money(pieSlices[0].category.total)} · ${pieSlices[0].percentage}%`}</title></circle> : pieSlices.map(slice => <path className="pie-slice" key={slice.category.id} d={donutSlice(slice.start, slice.end)} fill={slice.category.color} tabIndex={0} aria-label={`${slice.category.name}: ${money(slice.category.total)}, ${slice.percentage}%`} onMouseEnter={() => setHoveredCategoryId(slice.category.id)} onMouseLeave={() => setHoveredCategoryId(null)} onFocus={() => setHoveredCategoryId(slice.category.id)} onBlur={() => setHoveredCategoryId(null)}><title>{`${slice.category.name}: ${money(slice.category.total)} · ${slice.percentage}%`}</title></path>)}</svg><div className="pie-center"><b>{hoveredCategory ? `${hoveredCategory.percentage}%` : money(categoryTotal)}</b><small>{hoveredCategory ? hoveredCategory.category.name : 'Total pessoal'}</small></div></div><div className="pie-legend">{pieSlices.map(slice => <div key={slice.category.id}><span><i style={{ background: slice.category.color }} />{slice.category.name}</span><b>{money(slice.category.total)}</b></div>)}</div></div> : <div className="empty compact">Sem dados para este mês.</div>}</div>
             <div className="panel upcoming"><div className="panel-head"><div><h2>O que vem pela frente</h2><p>Valores pessoais já previstos</p></div><span className="calendar-icon">▦</span></div>{nextMonths.slice(1, 5).map(m => { const due = occurrences.filter(e => e.month === m); return <div className="upcoming-row" key={m}><span className="mini-date"><b>{m.slice(5)}</b><small>{m.slice(0, 4)}</small></span><span className="upcoming-name"><b>{monthName(m)}</b><small>{due.length} {due.length === 1 ? 'despesa' : 'despesas'}</small></span><b className="upcoming-value">{money(due.reduce((s, e) => s + personalValue(e), 0))}</b></div> })}<div className="future-note"><span>ⓘ</span> Sua parte após descontar os valores atribuídos a terceiros.</div></div>
+            <div className="panel cards-summary-panel"><div className="panel-head"><div><h2>Resumo por cartão</h2><p>Faturas previstas em {monthName(month)} e fechamento</p></div><span className="calendar-icon">▣</span></div>{cardSummaries.length ? <div className="cards-summary-grid">{cardSummaries.map(({ card, invoiceTotal, personalPart, sharedPart, count, nextInvoiceTotal }) => <div className="card-summary-item" key={card.id}><div className="card-summary-top"><div className="card-summary-title"><span className="card-icon">▣</span><div><b>{card.name}</b><small>Fecha dia {card.closingDay} · Vence dia {card.dueDay}</small></div></div><button type="button" className="text-btn card-summary-link" onClick={() => openCardTransactions(card.id)}>Ver fatura →</button></div><div className="card-summary-amount"><span>Total da fatura ({count} {count === 1 ? 'item' : 'itens'})</span><strong>{money(invoiceTotal)}</strong></div><div className="card-summary-breakdown"><span>Sua parte: <b>{money(personalPart)}</b></span>{sharedPart > 0 && <span>Terceiros: <b>{money(sharedPart)}</b></span>}<span>Próx. mês: <b>{money(nextInvoiceTotal)}</b></span></div></div>)}</div> : <div className="empty compact">Nenhum cartão cadastrado. <button className="text-btn" onClick={() => { setView('Ajustes'); openCard() }}>Adicionar cartão →</button></div>}</div>
             <div className="panel reimbursement-panel"><div className="panel-head"><div><h2>Quem precisa te pagar</h2><p>Reembolsos deste mês e parcelas futuras</p></div><span className="stat-symbol orange">＋</span></div>{reimbursementByParticipant.length ? <>{reimbursementByParticipant.map(({ participant, current: thisMonth, future }) => <div className="reimbursement-row" key={participant.id}><div className="reimbursement-person"><span className="participant-avatar">{participant.name.slice(0, 1).toUpperCase()}</span><b>{participant.name}</b></div><div className="reimbursement-values"><span>Neste mês <b>{money(thisMonth)}</b></span><span>Parcelas futuras <b>{money(future)}</b></span></div></div>)}<div className="reimbursement-total"><span>Total a receber neste mês</span><b>{money(reimbursementTotal)}</b></div></> : <div className="empty compact">{(data.participants || []).length ? 'Adicione a parte de alguém em uma despesa para ver aqui quanto ela deve te pagar.' : <>Cadastre uma pessoa direto em uma despesa compartilhada. <button className="text-btn" onClick={openNewExpenseModal}>Nova despesa →</button></>}</div>}</div>
           </section>
         </> : <section className="data-page">{transactionTable}</section>}
@@ -881,6 +1043,36 @@ function App() {
       </form>
     </div>}
     {easterEggOpen && <div className={`modal-backdrop easter-egg-backdrop ${closingModal === 'easter-egg' ? 'is-closing' : ''}`} onMouseDown={event => { if (event.target === event.currentTarget) closeEasterEgg() }}>{easterEggMessage ? <section className="modal easter-egg-modal is-revealed" role="dialog" aria-modal="true" aria-labelledby="easter-egg-title"><div className="modal-header"><div><span className="eyebrow">SEGREDO DESBLOQUEADO</span><h2 id="easter-egg-title">Mensagem secreta</h2></div><button type="button" aria-label="Fechar" onClick={closeEasterEgg}>×</button></div><div className="easter-egg-reveal" role="status"><p>{easterEggMessage}</p></div><div className="modal-actions"><button type="button" className="cancel-btn" onClick={() => { setEasterEggMessage(''); setEasterEggPassword(''); setEasterEggError(false); setEasterEggShake(false); window.requestAnimationFrame(() => easterEggInputRef.current?.focus()) }}>Outra senha</button><button type="button" className="primary" onClick={closeEasterEgg}>Fechar</button></div></section> : <form noValidate className={`modal easter-egg-modal ${easterEggShake ? 'is-shaking' : ''}`} role="dialog" aria-modal="true" aria-labelledby="easter-egg-title" onSubmit={submitEasterEgg} onAnimationEnd={event => { if (event.animationName === 'nexus-modal-shake') setEasterEggShake(false) }}><div className="modal-header"><div><span className="eyebrow">SEGREDO DESBLOQUEADO</span><h2 id="easter-egg-title">Digite a senha</h2></div><button type="button" aria-label="Fechar" onClick={closeEasterEgg}>×</button></div><label className={easterEggError ? 'easter-egg-field is-invalid' : 'easter-egg-field'}>Senha<input ref={easterEggInputRef} type="password" aria-invalid={easterEggError} value={easterEggPassword} onChange={event => { setEasterEggPassword(event.target.value); if (easterEggError) setEasterEggError(false) }} placeholder="Digite a senha" />{easterEggError && <small className="field-error-msg" role="alert">Senha incorreta. Tente novamente.</small>}</label><div className="modal-actions"><button type="button" className="cancel-btn" onClick={closeEasterEgg}>Fechar</button><button className="primary" type="submit">Confirmar</button></div></form>}</div>}
+    {pwaGuideOpen && <div className={`modal-backdrop ${closingModal === 'pwa-guide' ? 'is-closing' : ''}`} onMouseDown={event => { if (event.target === event.currentTarget) closePwaGuideModal() }}>
+      <section className="modal pwa-guide-modal" role="dialog" aria-modal="true" aria-labelledby="pwa-guide-title">
+        <div className="modal-header">
+          <div><span className="eyebrow">APLICATIVO NA TELA INICIAL</span><h2 id="pwa-guide-title">Como instalar o Põe na Conta</h2></div>
+          <button type="button" aria-label="Fechar instruções" onClick={closePwaGuideModal}>×</button>
+        </div>
+        <p className="confirm-dialog-description">Ao adicionar o ícone à tela inicial, o Põe na Conta abre em tela cheia (sem barra de endereço) e funciona 100% offline.</p>
+        <div className="pwa-guide-steps">
+          <div className="pwa-guide-card">
+            <b>No iPhone / iPad (Safari)</b>
+            <ol>
+              <li>Toque no ícone <b>Compartilhar</b> (quadrado com seta para cima <b>↑</b>) na barra do Safari.</li>
+              <li>Role a lista para baixo e toque em <b>Adicionar à Tela de Início</b>.</li>
+              <li>Confirme tocando em <b>Adicionar</b> no canto superior direito.</li>
+            </ol>
+          </div>
+          <div className="pwa-guide-card">
+            <b>No Android (Chrome / Edge / Samsung)</b>
+            <ol>
+              <li>Toque no menu de três pontos (<b>⋮</b>) no canto do navegador.</li>
+              <li>Selecione <b>Instalar aplicativo</b> ou <b>Adicionar à tela inicial</b>.</li>
+              <li>Confirme a instalação para criar o atalho em tela cheia.</li>
+            </ol>
+          </div>
+        </div>
+        <div className="modal-actions">
+          <button type="button" className="primary" onClick={closePwaGuideModal}>Entendi</button>
+        </div>
+      </section>
+    </div>}
   </div>
 }
 
