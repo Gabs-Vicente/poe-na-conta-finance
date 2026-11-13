@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { buildOccurrences, cardDueMonth, createBackup, csvCell, parseBackup, parseBackupFile, readStoredData, seed, validateData } from '../src/finance.ts'
+import { buildOccurrences, cardDueMonth, createBackup, csvCell, normalizeData, normalizeDateInput, parseBackup, parseBackupFile, parseMoneyInput, readStoredData, seed, validateData } from '../src/finance.ts'
 
 const card = { id: 'card', name: 'Principal', closingDay: 25, dueDay: 5 }
 
@@ -53,4 +53,35 @@ test('protege valores não confiáveis contra fórmulas e escapa separadores CSV
   assert.equal(csvCell('=1+1', true), '"\'=1+1"')
   assert.equal(csvCell('texto; com "aspas"'), '"texto; com ""aspas"""')
   assert.equal(csvCell(12.5), '"12.5"')
+})
+
+test('interpreta valores monetários com vírgula ou ponto e datas no formato brasileiro (Mac/Safari)', () => {
+  assert.equal(parseMoneyInput('150,50'), 150.5)
+  assert.equal(parseMoneyInput('1.250,50'), 1250.5)
+  assert.equal(parseMoneyInput('150.50'), 150.5)
+  assert.equal(parseMoneyInput('R$ 89,90'), 89.9)
+  assert.equal(normalizeDateInput('13/11/2026'), '2026-11-13')
+  assert.equal(normalizeDateInput('2026-11-13'), '2026-11-13')
+
+  const macPayload = {
+    ...seed,
+    expenses: [
+      { id: 'mac-1', description: 'Café', amount: '18,50', date: '13/11/2026', category: '', method: 'PIX', installments: '1', firstMonth: '2026-11' },
+    ],
+  }
+  const normalized = normalizeData(macPayload)
+  assert.equal(normalized?.expenses[0]?.amount, 18.5)
+  assert.equal(normalized?.expenses[0]?.date, '2026-11-13')
+  assert.equal(normalized?.expenses[0]?.category, 'moradia')
+
+  const withCorruptedNullAmount = JSON.stringify({
+    ...seed,
+    expenses: [
+      ...seed.expenses,
+      { id: 'nan-bug', description: 'Falha vírgula', amount: null, date: '2026-11-13', category: 'moradia', method: 'PIX', installments: 1, firstMonth: '2026-11' },
+    ],
+  })
+  const recovered = readStoredData(withCorruptedNullAmount)
+  assert.equal(recovered.warning, undefined)
+  assert.equal(recovered.data.expenses.length, seed.expenses.length)
 })

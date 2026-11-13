@@ -30,10 +30,36 @@ export const seed: Data = {
   ],
 }
 
+export const dateKey = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
 export const monthKey = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
 export const shiftMonth = (key: string, amount: number) => {
   const [year, month] = key.split('-').map(Number)
   return monthKey(new Date(year, month - 1 + amount, 1))
+}
+
+export const parseMoneyInput = (raw: string | number): number => {
+  if (typeof raw === 'number') return raw
+  const cleaned = String(raw ?? '').trim().replace(/[R$\s]/g, '')
+  if (!cleaned) return Number.NaN
+  const lastComma = cleaned.lastIndexOf(',')
+  const lastDot = cleaned.lastIndexOf('.')
+  let normalized = cleaned
+  if (lastComma > lastDot) {
+    normalized = cleaned.replace(/\./g, '').replace(',', '.')
+  } else if (lastDot > lastComma && lastComma !== -1) {
+    normalized = cleaned.replace(/,/g, '')
+  }
+  return Number(normalized)
+}
+
+export const normalizeDateInput = (raw: string): string => {
+  const trimmed = String(raw ?? '').trim()
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed
+  const brMatch = /^(\d{2})[/.-](\d{2})[/.-](\d{4})$/.exec(trimmed)
+  if (brMatch) return `${brMatch[3]}-${brMatch[2]}-${brMatch[1]}`
+  const isoSlashMatch = /^(\d{4})[/](\d{2})[/](\d{2})$/.exec(trimmed)
+  if (isoSlashMatch) return `${isoSlashMatch[1]}-${isoSlashMatch[2]}-${isoSlashMatch[3]}`
+  return trimmed
 }
 
 export const cardDueMonth = (purchaseDate: string, card: Card) => {
@@ -74,8 +100,38 @@ const isRecord = (value: unknown): value is Record<string, unknown> => typeof va
 const isText = (value: unknown): value is string => typeof value === 'string'
 const isFiniteNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)
 const isDay = (value: unknown): value is number => Number.isInteger(value) && Number(value) >= 1 && Number(value) <= 31
-const isDate = (value: unknown): value is string => isText(value) && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(new Date(`${value}T12:00:00`).getTime()) && new Date(`${value}T12:00:00`).toISOString().slice(0, 10) === value
+export const isDate = (value: unknown): value is string => {
+  if (!isText(value) || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const [year, month, day] = value.split('-').map(Number)
+  const parsed = new Date(year, month - 1, day, 12, 0, 0)
+  return !Number.isNaN(parsed.getTime()) && dateKey(parsed) === value
+}
 const methods: Method[] = ['PIX', 'Débito', 'Crédito à vista', 'Crédito parcelado']
+
+const coerceInputData = (value: unknown): unknown => {
+  if (!isRecord(value) || !Array.isArray(value.categories) || !Array.isArray(value.cards) || !Array.isArray(value.expenses)) return value
+  const defaultCategoryId = isRecord(value.categories[0]) && isText(value.categories[0].id) ? value.categories[0].id : 'moradia'
+  const expenses = value.expenses.map(item => {
+    if (!isRecord(item)) return item
+    const amount = typeof item.amount === 'string' ? parseMoneyInput(item.amount) : item.amount
+    const date = typeof item.date === 'string' ? normalizeDateInput(item.date) : item.date
+    const category = isText(item.category) && item.category.trim() ? item.category : defaultCategoryId
+    const installments = typeof item.installments === 'string' ? Number(item.installments) : item.installments
+    const firstMonth = isText(item.firstMonth) && /^\d{4}-\d{2}$/.test(item.firstMonth)
+      ? item.firstMonth
+      : isDate(date)
+        ? date.slice(0, 7)
+        : item.firstMonth
+    const shares = Array.isArray(item.shares)
+      ? item.shares.map(share => isRecord(share) ? { ...share, amount: typeof share.amount === 'string' ? parseMoneyInput(share.amount) : share.amount } : share)
+      : item.shares
+    return { ...item, amount, date, category, installments, firstMonth, ...(shares !== undefined ? { shares } : {}) }
+  })
+  const recurrences = Array.isArray(value.recurrences)
+    ? value.recurrences.map(item => isRecord(item) ? { ...item, amount: typeof item.amount === 'string' ? parseMoneyInput(item.amount) : item.amount, day: typeof item.day === 'string' ? Number(item.day) : item.day } : item)
+    : value.recurrences
+  return { ...value, expenses, ...(recurrences !== undefined ? { recurrences } : {}) }
+}
 
 export const validateData = (value: unknown): value is Data => {
   if (!isRecord(value) || !Array.isArray(value.categories) || !Array.isArray(value.cards) || !Array.isArray(value.expenses)) return false
@@ -94,7 +150,8 @@ export const validateData = (value: unknown): value is Data => {
   })
 }
 
-export const normalizeData = (value: unknown): Data | null => {
+export const normalizeData = (rawValue: unknown): Data | null => {
+  const value = coerceInputData(rawValue)
   if (!validateData(value)) return null
   const oldSeedColors: Record<string, string> = { moradia: '#6c7cf0', alimentacao: '#f1a455', transporte: '#5ab89b', lazer: '#db77a6', saude: '#64a9cf' }
   const palette: Record<string, string> = { moradia: '#6e7f72', alimentacao: '#b88b63', transporte: '#74858b', lazer: '#9b8193', saude: '#8b966d' }
@@ -113,8 +170,17 @@ export type StoredData = { data: Data; warning?: string }
 export const readStoredData = (raw: string | null): StoredData => {
   if (!raw) return { data: structuredClone(seed) }
   try {
-    const data = normalizeData(JSON.parse(raw) as unknown)
-    return data ? { data } : { data: structuredClone(seed), warning: 'Os dados salvos não passaram na validação. Seus dados originais continuam no navegador; importe um backup válido antes de salvar novos lançamentos.' }
+    const parsed: unknown = JSON.parse(raw)
+    const data = normalizeData(parsed)
+    if (data) return { data }
+    if (isRecord(parsed) && Array.isArray(parsed.expenses)) {
+      const cleanedExpenses = parsed.expenses.filter(item => isRecord(item) && item.amount !== null)
+      if (cleanedExpenses.length !== parsed.expenses.length) {
+        const recovered = normalizeData({ ...parsed, expenses: cleanedExpenses })
+        if (recovered) return { data: recovered }
+      }
+    }
+    return { data: structuredClone(seed), warning: 'Os dados salvos não passaram na validação. Seus dados originais continuam no navegador; importe um backup válido antes de salvar novos lançamentos.' }
   } catch {
     return { data: structuredClone(seed), warning: 'Não foi possível ler os dados salvos. Eles continuam no navegador; importe um backup válido antes de salvar novos lançamentos.' }
   }
