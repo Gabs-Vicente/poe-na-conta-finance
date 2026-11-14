@@ -1,13 +1,54 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { buildOccurrences, cardDueMonth, createBackup, csvCell, formatMoneyInput, normalizeData, normalizeDateInput, parseBackup, parseBackupFile, parseMoneyInput, readStoredData, seed, validateData } from '../src/finance.ts'
+import { buildOccurrences, cardDueMonth, createBackup, csvCell, expenseFirstMonth, formatMoneyInput, normalizeData, normalizeDateInput, parseBackup, parseBackupFile, parseMoneyInput, readStoredData, seed, validateData } from '../src/finance.ts'
 
-const card = { id: 'card', name: 'Principal', closingDay: 25, dueDay: 5 }
+const card = { id: 'card', name: 'Principal', closingDay: 25, dueDay: 5, closingDayRule: 'after' }
+const cardClosing30 = { id: 'card30', name: 'Cartão dia 30', closingDay: 30, dueDay: 10, closingDayRule: 'after' }
 
-test('calcula o mês da fatura antes, no fechamento e depois do fechamento', () => {
-  assert.equal(cardDueMonth('2026-11-24', card), '2026-12')
-  assert.equal(cardDueMonth('2026-11-25', card), '2027-01')
-  assert.equal(cardDueMonth('2026-11-26', card), '2027-01')
+test('calcula o mês da fatura antes, no fechamento (configurável) e depois do fechamento', () => {
+  assert.equal(cardDueMonth('2026-11-13', card), '2026-11')
+  assert.equal(cardDueMonth('2026-11-24', card), '2026-11')
+  assert.equal(cardDueMonth('2026-11-25', card), '2026-12')
+  assert.equal(cardDueMonth('2026-11-25', card, false), '2026-11')
+  assert.equal(cardDueMonth('2026-11-25', { ...card, closingDayRule: 'before' }), '2026-11')
+  assert.equal(cardDueMonth('2026-11-26', card), '2026-12')
+
+  // Exemplo do cartão com fechamento no dia 30:
+  assert.equal(cardDueMonth('2026-11-28', cardClosing30), '2026-11')
+  assert.equal(cardDueMonth('2026-11-29', cardClosing30), '2026-11')
+  assert.equal(cardDueMonth('2026-11-30', cardClosing30, true), '2026-12')
+  assert.equal(cardDueMonth('2026-11-30', cardClosing30, false), '2026-11')
+  assert.equal(cardDueMonth('2026-12-01', cardClosing30), '2026-12')
+})
+
+test('contabiliza compras no PIX, débito ou dinheiro diretamente no mês da compra', () => {
+  assert.equal(expenseFirstMonth('2026-11-13', 'PIX', cardClosing30), '2026-11')
+  assert.equal(expenseFirstMonth('2026-11-20', 'Débito', cardClosing30), '2026-11')
+  assert.equal(expenseFirstMonth('2026-11-25', 'Dinheiro', cardClosing30), '2026-11')
+  assert.equal(expenseFirstMonth('2026-11-30', 'PIX', card), '2026-11')
+})
+
+test('distribui compra parcelada no crédito (ex.: R$ 600 em 3x de R$ 200) para cada respectiva fatura', () => {
+  const firstMonth = expenseFirstMonth('2026-11-13', 'Crédito parcelado', card)
+  assert.equal(firstMonth, '2026-11')
+  const expense = { id: 'parcelado-600', description: 'Compra parcelada', amount: 600, date: '2026-11-13', category: 'lazer', method: 'Crédito parcelado', cardId: card.id, installments: 3, firstMonth }
+  const occurrences = buildOccurrences([expense])
+  assert.deepEqual(occurrences.map(item => ({ month: item.month, value: item.value, part: item.part })), [
+    { month: '2026-11', value: 200, part: 1 },
+    { month: '2026-12', value: 200, part: 2 },
+    { month: '2027-01', value: 200, part: 3 },
+  ])
+})
+
+test('migra lançamentos existentes no crédito preservando dados e ajustando o mês da fatura', () => {
+  const legacyPayload = {
+    ...seed,
+    expenses: [
+      { id: 'legacy-credit', description: 'Compra hoje no crédito', amount: 150, date: '2026-11-13', category: 'alimentacao', method: 'Crédito à vista', cardId: 'principal', installments: 1, firstMonth: '2026-12' },
+    ],
+  }
+  const normalized = normalizeData(legacyPayload)
+  assert.equal(normalized?.expenses[0]?.firstMonth, '2026-11')
 })
 
 test('divide parcelas em centavos sem perder o valor total', () => {

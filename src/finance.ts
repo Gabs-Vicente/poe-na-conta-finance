@@ -1,9 +1,10 @@
-export type Method = 'PIX' | 'Débito' | 'Crédito à vista' | 'Crédito parcelado'
+export type Method = 'PIX' | 'Débito' | 'Dinheiro' | 'Crédito à vista' | 'Crédito parcelado'
+export type ClosingDayRule = 'after' | 'before'
 export type Category = { id: string; name: string; color: string }
-export type Card = { id: string; name: string; closingDay: number; dueDay: number }
+export type Card = { id: string; name: string; closingDay: number; dueDay: number; closingDayRule?: ClosingDayRule }
 export type Participant = { id: string; name: string }
 export type ParticipantShare = { participantId: string; amount: number; installment?: number }
-export type Expense = { id: string; description: string; amount: number; date: string; category: string; method: Method; cardId?: string; installments: number; firstMonth: string; shares?: ParticipantShare[] }
+export type Expense = { id: string; description: string; amount: number; date: string; category: string; method: Method; cardId?: string; installments: number; firstMonth: string; afterClosing?: boolean; shares?: ParticipantShare[] }
 export type Recurrence = { id: string; description: string; amount: number; category: string; method: Method; cardId?: string; day: number; active: boolean; generatedMonths: string[]; skippedMonths: string[] }
 export type Occurrence = Expense & { part: number; month: string; value: number; allocatedShares: ParticipantShare[] }
 export type Data = { categories: Category[]; cards: Card[]; participants: Participant[]; expenses: Expense[]; recurrences?: Recurrence[] }
@@ -19,14 +20,14 @@ export type BackupPayload = { data: Data; preferences?: BackupPreferences }
 
 export const seed: Data = {
   categories: [{ id: 'moradia', name: 'Moradia', color: '#6e7f72' }, { id: 'alimentacao', name: 'Alimentação', color: '#b88b63' }, { id: 'transporte', name: 'Transporte', color: '#74858b' }, { id: 'lazer', name: 'Lazer', color: '#9b8193' }, { id: 'saude', name: 'Saúde', color: '#8b966d' }],
-  cards: [{ id: 'principal', name: 'Cartão principal', closingDay: 25, dueDay: 5 }],
+  cards: [{ id: 'principal', name: 'Cartão principal', closingDay: 25, dueDay: 5, closingDayRule: 'after' }],
   participants: [],
   expenses: [
     { id: 'e1', description: 'Aluguel', amount: 1850, date: '2026-11-05', category: 'moradia', method: 'PIX', installments: 1, firstMonth: '2026-11' },
     { id: 'e2', description: 'Mercado da semana', amount: 286.4, date: '2026-11-08', category: 'alimentacao', method: 'Débito', installments: 1, firstMonth: '2026-11' },
-    { id: 'e3', description: 'Fone bluetooth', amount: 599.9, date: '2026-11-10', category: 'lazer', method: 'Crédito parcelado', cardId: 'principal', installments: 3, firstMonth: '2026-12' },
+    { id: 'e3', description: 'Fone bluetooth', amount: 599.9, date: '2026-11-10', category: 'lazer', method: 'Crédito parcelado', cardId: 'principal', installments: 3, firstMonth: '2026-11' },
     { id: 'e4', description: 'Conta de luz', amount: 142.7, date: '2026-11-11', category: 'moradia', method: 'PIX', installments: 1, firstMonth: '2026-11' },
-    { id: 'e5', description: 'Combustível', amount: 220, date: '2026-11-12', category: 'transporte', method: 'Crédito à vista', cardId: 'principal', installments: 1, firstMonth: '2026-12' },
+    { id: 'e5', description: 'Combustível', amount: 220, date: '2026-11-12', category: 'transporte', method: 'Crédito à vista', cardId: 'principal', installments: 1, firstMonth: '2026-11' },
   ],
 }
 
@@ -74,11 +75,18 @@ export const normalizeDateInput = (raw: string): string => {
   return trimmed
 }
 
-export const cardDueMonth = (purchaseDate: string, card: Card) => {
+export const cardDueMonth = (purchaseDate: string, card: Card, afterClosing?: boolean) => {
   const purchaseMonth = monthKey(new Date(`${purchaseDate}T12:00:00`))
   const purchaseDay = Number(purchaseDate.slice(-2))
-  const closingMonth = shiftMonth(purchaseMonth, purchaseDay >= card.closingDay ? 1 : 0)
-  return shiftMonth(closingMonth, card.dueDay <= card.closingDay ? 1 : 0)
+  if (purchaseDay < card.closingDay) return purchaseMonth
+  if (purchaseDay > card.closingDay) return shiftMonth(purchaseMonth, 1)
+  const closedOnClosingDay = afterClosing ?? (card.closingDayRule !== 'before')
+  return shiftMonth(purchaseMonth, closedOnClosingDay ? 1 : 0)
+}
+
+export const expenseFirstMonth = (purchaseDate: string, method: Method, card?: Card, afterClosing?: boolean) => {
+  if (method.startsWith('Crédito') && card) return cardDueMonth(purchaseDate, card, afterClosing)
+  return monthKey(new Date(`${purchaseDate}T12:00:00`))
 }
 
 export const buildOccurrences = (expenses: Expense[]): Occurrence[] => expenses.flatMap(expense => {
@@ -118,7 +126,7 @@ export const isDate = (value: unknown): value is string => {
   const parsed = new Date(year, month - 1, day, 12, 0, 0)
   return !Number.isNaN(parsed.getTime()) && dateKey(parsed) === value
 }
-const methods: Method[] = ['PIX', 'Débito', 'Crédito à vista', 'Crédito parcelado']
+const methods: Method[] = ['PIX', 'Débito', 'Dinheiro', 'Crédito à vista', 'Crédito parcelado']
 
 const coerceInputData = (value: unknown): unknown => {
   if (!isRecord(value) || !Array.isArray(value.categories) || !Array.isArray(value.cards) || !Array.isArray(value.expenses)) return value
@@ -150,13 +158,14 @@ export const validateData = (value: unknown): value is Data => {
   const participants = value.participants === undefined ? [] : value.participants
   if (!Array.isArray(participants)) return false
   if (!value.categories.every(item => isRecord(item) && isText(item.id) && isText(item.name) && isText(item.color))) return false
-  if (!value.cards.every(item => isRecord(item) && isText(item.id) && isText(item.name) && isDay(item.closingDay) && isDay(item.dueDay))) return false
+  if (!value.cards.every(item => isRecord(item) && isText(item.id) && isText(item.name) && isDay(item.closingDay) && isDay(item.dueDay) && (item.closingDayRule === undefined || item.closingDayRule === 'after' || item.closingDayRule === 'before'))) return false
   if (!participants.every(item => isRecord(item) && isText(item.id) && isText(item.name))) return false
   const recurrences = value.recurrences === undefined ? [] : value.recurrences
   if (!Array.isArray(recurrences) || !recurrences.every(item => isRecord(item) && isText(item.id) && isText(item.description) && isFiniteNumber(item.amount) && item.amount > 0 && isText(item.category) && methods.includes(item.method as Method) && isDay(item.day) && typeof item.active === 'boolean' && (item.cardId === undefined || isText(item.cardId)) && Array.isArray(item.generatedMonths) && item.generatedMonths.every(isText) && Array.isArray(item.skippedMonths) && item.skippedMonths.every(isText))) return false
   return value.expenses.every(item => {
     if (!isRecord(item) || !isText(item.id) || !isText(item.description) || !isFiniteNumber(item.amount) || item.amount <= 0 || !isDate(item.date) || !isText(item.category) || !methods.includes(item.method as Method) || !Number.isInteger(item.installments) || Number(item.installments) < 1 || Number(item.installments) > 60 || !isText(item.firstMonth) || !/^\d{4}-\d{2}$/.test(item.firstMonth)) return false
     if (item.cardId !== undefined && !isText(item.cardId)) return false
+    if (item.afterClosing !== undefined && typeof item.afterClosing !== 'boolean') return false
     if (item.shares !== undefined && (!Array.isArray(item.shares) || !item.shares.every(share => isRecord(share) && isText(share.participantId) && isFiniteNumber(share.amount) && share.amount >= 0 && (share.installment === undefined || (Number.isInteger(share.installment) && Number(share.installment) >= 1 && Number(share.installment) <= 60))))) return false
     return true
   })
@@ -168,14 +177,18 @@ export const normalizeData = (rawValue: unknown): Data | null => {
   const oldSeedColors: Record<string, string> = { moradia: '#6c7cf0', alimentacao: '#f1a455', transporte: '#5ab89b', lazer: '#db77a6', saude: '#64a9cf' }
   const palette: Record<string, string> = { moradia: '#6e7f72', alimentacao: '#b88b63', transporte: '#74858b', lazer: '#9b8193', saude: '#8b966d' }
   const categories = value.categories.map(category => category.color === oldSeedColors[category.id] ? { ...category, color: palette[category.id] } : category)
+  const cards = value.cards.map(card => ({ ...card, closingDayRule: card.closingDayRule ?? 'after' }))
   const expenses = value.expenses.map(expense => {
-    const card = value.cards.find(item => item.id === expense.cardId)
-    if (!card || !expense.method.startsWith('Crédito')) return expense
-    const purchaseMonth = monthKey(new Date(`${expense.date}T12:00:00`))
-    const oldDueMonth = shiftMonth(purchaseMonth, Number(expense.date.slice(-2)) >= card.closingDay ? 1 : 0)
-    return expense.firstMonth === oldDueMonth ? { ...expense, firstMonth: cardDueMonth(expense.date, card) } : expense
+    if (!expense.method.startsWith('Crédito')) {
+      const purchaseMonth = monthKey(new Date(`${expense.date}T12:00:00`))
+      return expense.firstMonth === purchaseMonth ? expense : { ...expense, firstMonth: purchaseMonth }
+    }
+    const card = cards.find(item => item.id === expense.cardId) || (expense.cardId === undefined ? cards[0] : undefined)
+    if (!card) return expense
+    const expectedFirstMonth = cardDueMonth(expense.date, card, expense.afterClosing)
+    return expense.firstMonth === expectedFirstMonth ? expense : { ...expense, firstMonth: expectedFirstMonth }
   })
-  return { ...value, categories, expenses, participants: value.participants || [], recurrences: value.recurrences || [] } as Data
+  return { ...value, categories, cards, expenses, participants: value.participants || [], recurrences: value.recurrences || [] } as Data
 }
 
 export type StoredData = { data: Data; warning?: string }
