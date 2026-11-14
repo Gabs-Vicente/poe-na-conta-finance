@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { buildOccurrences, cardDueMonth, createBackup, csvCell, expenseFirstMonth, formatMoneyInput, normalizeData, normalizeDateInput, parseBackup, parseBackupFile, parseMoneyInput, readStoredData, seed, validateData } from '../src/finance.ts'
+import { buildInstallmentRelief, buildOccurrences, cardDueMonth, createBackup, csvCell, expenseFirstMonth, formatMoneyInput, normalizeData, normalizeDateInput, occurrencePersonalValue, parseBackup, parseBackupFile, parseMoneyInput, readStoredData, seed, validateData } from '../src/finance.ts'
 
 const card = { id: 'card', name: 'Principal', closingDay: 25, dueDay: 5, closingDayRule: 'after' }
 const cardClosing30 = { id: 'card30', name: 'Cartão dia 30', closingDay: 30, dueDay: 10, closingDayRule: 'after' }
@@ -131,4 +131,27 @@ test('interpreta valores monetários com vírgula ou ponto e datas no formato br
   const recovered = readStoredData(withCorruptedNullAmount)
   assert.equal(recovered.warning, undefined)
   assert.equal(recovered.data.expenses.length, seed.expenses.length)
+})
+
+test('calcula fim das parcelas e alívio mensal de fatura descontando parte de terceiros', () => {
+  const expenses = [
+    { id: 'notebook', description: 'Notebook', amount: 3000, date: '2026-10-10', category: 'lazer', method: 'Crédito parcelado', cardId: 'principal', installments: 3, firstMonth: '2026-10', shares: [{ participantId: 'p1', amount: 600 }] },
+    { id: 'celular', description: 'Celular', amount: 1600, date: '2026-11-05', category: 'lazer', method: 'Crédito parcelado', cardId: 'principal', installments: 4, firstMonth: '2026-11' },
+    { id: 'avista', description: 'Mercado', amount: 250, date: '2026-11-12', category: 'alimentacao', method: 'Crédito à vista', cardId: 'principal', installments: 1, firstMonth: '2026-11' },
+  ]
+  const occurrences = buildOccurrences(expenses)
+  const notebookNov = occurrences.find(item => item.id === 'notebook' && item.month === '2026-11')
+  assert.equal(occurrencePersonalValue(notebookNov), 800)
+
+  const reliefNov = buildInstallmentRelief(occurrences, '2026-11')
+  assert.equal(reliefNov.items.length, 2)
+  assert.equal(reliefNov.items[0].id, 'notebook')
+  assert.equal(reliefNov.items[0].part, 2)
+  assert.equal(reliefNov.items[0].remainingAfterCurrent, 1)
+  assert.equal(reliefNov.items[0].lastMonth, '2026-12')
+  assert.equal(reliefNov.items[0].reliefMonth, '2027-01')
+  assert.equal(reliefNov.items[0].personalValue, 800)
+  assert.equal(reliefNov.milestones[0].lastMonth, '2026-12')
+  assert.equal(reliefNov.milestones[0].reliefMonth, '2027-01')
+  assert.equal(reliefNov.milestones[0].freedPersonalAmount, 800)
 })

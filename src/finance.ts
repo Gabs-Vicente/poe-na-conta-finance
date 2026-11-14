@@ -7,6 +7,31 @@ export type ParticipantShare = { participantId: string; amount: number; installm
 export type Expense = { id: string; description: string; amount: number; date: string; category: string; method: Method; cardId?: string; installments: number; firstMonth: string; afterClosing?: boolean; shares?: ParticipantShare[] }
 export type Recurrence = { id: string; description: string; amount: number; category: string; method: Method; cardId?: string; day: number; active: boolean; generatedMonths: string[]; skippedMonths: string[] }
 export type Occurrence = Expense & { part: number; month: string; value: number; allocatedShares: ParticipantShare[] }
+export type InstallmentReliefItem = {
+  id: string
+  description: string
+  category: string
+  cardId?: string
+  part: number
+  installments: number
+  remainingAfterCurrent: number
+  lastMonth: string
+  reliefMonth: string
+  personalValue: number
+  totalValue: number
+}
+export type InstallmentReliefMilestone = {
+  lastMonth: string
+  reliefMonth: string
+  freedPersonalAmount: number
+  freedTotalAmount: number
+  count: number
+  descriptions: string[]
+}
+export type InstallmentReliefSummary = {
+  items: InstallmentReliefItem[]
+  milestones: InstallmentReliefMilestone[]
+}
 export type Data = { categories: Category[]; cards: Card[]; participants: Participant[]; expenses: Expense[]; recurrences?: Recurrence[] }
 export type BackupPreferences = {
   monthlyLimit: string
@@ -115,6 +140,52 @@ export const buildOccurrences = (expenses: Expense[]): Occurrence[] => expenses.
   })
   return values.map((value, i) => ({ ...expense, part: i + 1, month: shiftMonth(expense.firstMonth, i), value: value / 100, allocatedShares: allocations.map(share => ({ participantId: share.participantId, amount: share.parts[i] / 100 })).filter(share => share.amount > 0) }))
 })
+
+export const occurrencePersonalValue = (occurrence: Pick<Occurrence, 'value' | 'allocatedShares'>): number =>
+  Math.max(0, Math.round((occurrence.value - occurrence.allocatedShares.reduce((sum, share) => sum + share.amount, 0)) * 100) / 100)
+
+export const buildInstallmentRelief = (occurrences: Occurrence[], currentMonth: string): InstallmentReliefSummary => {
+  const activeInMonth = occurrences.filter(e => e.month === currentMonth && e.installments > 1)
+  const items: InstallmentReliefItem[] = activeInMonth.map(e => {
+    const lastMonth = shiftMonth(e.firstMonth, e.installments - 1)
+    const reliefMonth = shiftMonth(e.firstMonth, e.installments)
+    return {
+      id: e.id,
+      description: e.description,
+      category: e.category,
+      cardId: e.cardId,
+      part: e.part,
+      installments: e.installments,
+      remainingAfterCurrent: Math.max(0, e.installments - e.part),
+      lastMonth,
+      reliefMonth,
+      personalValue: occurrencePersonalValue(e),
+      totalValue: e.value,
+    }
+  }).sort((a, b) => a.lastMonth.localeCompare(b.lastMonth) || b.personalValue - a.personalValue)
+
+  const grouped = new Map<string, InstallmentReliefMilestone>()
+  for (const item of items) {
+    const existing = grouped.get(item.reliefMonth)
+    if (existing) {
+      existing.freedPersonalAmount = Math.round((existing.freedPersonalAmount + item.personalValue) * 100) / 100
+      existing.freedTotalAmount = Math.round((existing.freedTotalAmount + item.totalValue) * 100) / 100
+      existing.count += 1
+      existing.descriptions.push(item.description)
+    } else {
+      grouped.set(item.reliefMonth, {
+        lastMonth: item.lastMonth,
+        reliefMonth: item.reliefMonth,
+        freedPersonalAmount: item.personalValue,
+        freedTotalAmount: item.totalValue,
+        count: 1,
+        descriptions: [item.description],
+      })
+    }
+  }
+  const milestones = Array.from(grouped.values()).sort((a, b) => a.reliefMonth.localeCompare(b.reliefMonth))
+  return { items, milestones }
+}
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
 const isText = (value: unknown): value is string => typeof value === 'string'
